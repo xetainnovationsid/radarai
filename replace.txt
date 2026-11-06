@@ -1,1 +1,0 @@
-regex:(?mi)^Co-authored-by:.*copilot.*$===>
