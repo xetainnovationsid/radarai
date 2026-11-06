@@ -22,4 +22,4 @@ RUN useradd --create-home --uid 10001 radar \
 USER radar
 ENV RADAR_STORAGE_DIR=/var/lib/radar/private-images
 EXPOSE 8000
-CMD ["sh", "-c", "python -m alembic upgrade head && uvicorn radar_api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "python -m alembic upgrade head && uvicorn radar_api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
