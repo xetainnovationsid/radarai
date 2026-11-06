@@ -1,0 +1,88 @@
+{
+  "manifest_schema": "radar-ai.source-manifest/v1",
+  "manifest_revision": 1,
+  "recorded_at": "2026-10-26",
+  "recorded_timezone": "Asia/Jakarta",
+  "dataset": {
+    "canonical_name": "RSNA Intracranial Hemorrhage Detection",
+    "also_known_as": "RSNA 2019 Brain CT Hemorrhage Challenge dataset",
+    "publisher": "Radiological Society of North America (RSNA), with ASNR and contributing research institutions",
+    "source_release_year": 2019,
+    "modality": "Non-contrast axial head CT",
+    "image_format": "DICOM",
+    "label_format": "CSV; one image identifier per label row",
+    "prediction_targets": [
+      "any",
+      "epidural",
+      "intraparenchymal",
+      "intraventricular",
+      "subarachnoid",
+      "subdural"
+    ],
+    "published_scope": {
+      "images": 874035,
+      "annotated_exams_lower_bound": 25000,
+      "annotated_exams_qualifier": "more than",
+      "scope_note": "Published dataset-level figures; not verified counts for a local RADAR AI copy."
+    }
+  },
+  "sources": [
+    {
+      "role": "dataset_and_terms_registry",
+      "url": "https://registry.opendata.aws/rsna-intracranial-hemorrhage-detection/",
+      "accessed_at": "2026-10-26"
+    },
+    {
+      "role": "publisher_challenge_and_terms_links",
+      "url": "https://www.rsna.org/artificial-intelligence/ai-image-challenge/RSNA-Intracranial-Hemorrhage-Detection-Challenge-2019",
+      "accessed_at": "2026-10-26"
+    },
+    {
+      "role": "terms_of_use_and_attribution",
+      "url": "https://www.rsna.org/-/media/files/rsna/education/ai-resources-and-training/ai-image-challenge/rsna_ich_ai_challenge_2019_terms_of_use_and_attribution_final.pdf",
+      "accessed_at": "2026-10-26"
+    },
+    {
+      "role": "dataset_description",
+      "url": "https://www.rsna.org/education/%20ai-resources-and-training/-/media/Files/RSNA/Education/AI%20resources%20and%20training/AI%20image%20challenge/RSNA-2019-Brain-Hemorrhage-Detection-Challenge-Dataset-Description.ashx",
+      "accessed_at": "2026-10-26"
+    },
+    {
+      "role": "challenge_data_and_access",
+      "url": "https://www.kaggle.com/c/rsna-intracranial-hemorrhage-detection/data",
+      "accessed_at": "2026-10-26"
+    },
+    {
+      "role": "dataset_citation",
+      "url": "https://doi.org/10.1148/ryai.2020190211",
+      "citation": "Flanders AF, Prevedello LM, Shih G, et al. Construction of a Machine Learning Dataset through Collaboration: The RSNA 2019 Brain CT Hemorrhage Challenge. Radiology: Artificial Intelligence. 2020;2(3)."
+    }
+  ],
+  "usage_assessment": {
+    "commercial_use": "not_permitted_by_published_non_commercial_terms_without_separate_written_authorization",
+    "reidentification_or_subject_contact": "prohibited",
+    "redistribution": "prohibited_as_project_policy_pending_clarification; AWS registry prohibits redistribution while RSNA PDF gives attribution conditions",
+    "attribution_required_for_publication": true,
+    "assessment_note": "Apply the stricter AWS registry restriction while the official RSNA redistribution language conflict remains unresolved. Seek written clarification from RSNA before any redistribution or commercial use."
+  },
+  "local_copy": {
+    "present_in_workspace_at_recording": false,
+    "source_files": [],
+    "source_file_sha256": null,
+    "labels_csv_sha256": null,
+    "study_count": null,
+    "slice_count": null,
+    "per_target_counts": null,
+    "profile_status": "pending_authorized_private_source_files",
+    "note": "No source DICOMs or labels CSV were available in the workspace. Do not replace nulls with published aggregate counts; do not store patient identifiers here."
+  },
+  "immutability": {
+    "policy": "append_only_versioned_source_records",
+    "update_rule": "Create a new manifest revision for newly acquired source snapshots or changed terms; preserve prior revisions in version history."
+  },
+  "safety": {
+    "project_use": "research_prototype_only",
+    "clinical_use": false
+  }
+}
+

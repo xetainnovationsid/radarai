@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# JavaScript
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+apps/api/radar.db
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Data and model artifacts: never commit study data or model weights by default
+data/
+*.dcm
+!apps/web/public/fixtures/**/*.dcm
+*.nii
+*.nii.gz
+*.pt
+*.pth
+*.onnx
+*.safetensors
