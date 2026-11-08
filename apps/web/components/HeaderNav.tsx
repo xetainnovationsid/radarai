@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { Suspense } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/AuthContext";
 
 const NAV_ITEMS = [
@@ -13,15 +13,33 @@ const NAV_ITEMS = [
 ];
 
 export function HeaderNav() {
+  return (
+    <Suspense fallback={<HeaderNavFallback />}>
+      <HeaderNavContent />
+    </Suspense>
+  );
+}
+
+function HeaderNavFallback() {
+  return (
+    <header className="app-header" aria-hidden="true">
+      <div className="header-inner">
+        <span className="brand-group">
+          <span className="brand-mark">R</span>
+          <span className="brand-wordmark">radar <span>AI</span></span>
+        </span>
+      </div>
+    </header>
+  );
+}
+
+function HeaderNavContent() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { user, loading, signOut } = useAuth();
   const isLoginPage = pathname === "/login";
   const isStudyDetailPage = pathname.startsWith("/studies/") && pathname !== "/studies";
-  const [reviewQueueActive, setReviewQueueActive] = useState(false);
-
-  useEffect(() => {
-    setReviewQueueActive(new URLSearchParams(window.location.search).get("status") === "ready");
-  }, [pathname]);
+  const reviewQueueActive = searchParams.get("status") === "ready";
 
   if (isStudyDetailPage) return null;
 

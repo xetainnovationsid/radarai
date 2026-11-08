@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import type { Study, StudyStatus } from "@radar-ai/contracts";
 import { ErrorState } from "@/components/states/ErrorState";
 import { LoadingSkeleton } from "@/components/states/LoadingSkeleton";
@@ -17,9 +18,23 @@ const STATUS_LABELS: Record<StudyStatus, string> = {
 };
 
 export default function StudiesLibraryPage() {
+  return (
+    <Suspense fallback={<div className="study-library-page"><LoadingSkeleton label="Loading study library…" /></div>}>
+      <StudiesLibraryContent />
+    </Suspense>
+  );
+}
+
+function StudiesLibraryContent() {
+  const searchParams = useSearchParams();
   const [studies, setStudies] = useState<Study[]>([]);
   const [selectedStudyId, setSelectedStudyId] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
+  const [status, setStatus] = useState<StatusFilter>(() => {
+    const initialStatus = searchParams.get("status");
+    return initialStatus === "ready" || initialStatus === "uploaded" || initialStatus === "processing" || initialStatus === "failed"
+      ? initialStatus
+      : "all";
+  });
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -43,10 +58,6 @@ export default function StudiesLibraryPage() {
   }, []);
 
   useEffect(() => {
-    const initialStatus = new URLSearchParams(window.location.search).get("status");
-    if (initialStatus === "ready" || initialStatus === "uploaded" || initialStatus === "processing" || initialStatus === "failed") {
-      setStatus(initialStatus);
-    }
     void refresh();
   }, [refresh]);
 
