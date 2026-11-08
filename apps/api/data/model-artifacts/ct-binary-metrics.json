@@ -1,0 +1,205 @@
+{
+  "scope": "research prototype; NOT FOR CLINICAL USE",
+  "device": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+  "checkpoint": "C:\\Users\\Iqbal Dovandra\\Project Code\\Working Project\\radarai\\apps\\api\\data\\model-artifacts\\ct-binary-densenet121.pt",
+  "best_epoch": 4,
+  "test_patient_overlap_purged": 3,
+  "test_bags_before_purge": 150,
+  "test_bags_after_purge": 147,
+  "test_slices_before_purge": 5254,
+  "test_slices_after_purge": 5145,
+  "test_decoded_slices": 5145,
+  "test_decode_failures": {},
+  "train_slices": 29065,
+  "validation_slices": 5431,
+  "train_label_counts": {
+    "0": 24835,
+    "1": 4230
+  },
+  "validation_label_counts": {
+    "0": 4685,
+    "1": 746
+  },
+  "test_label_counts": {
+    "0": 4360,
+    "1": 785
+  },
+  "selected_checkpoint_validation_loss": 0.2397862242459647,
+  "selected_checkpoint_validation_decoded_slices": 5431,
+  "selected_checkpoint_validation_decode_failures": {},
+  "selected_checkpoint_validation_slice_metrics": {
+    "auc": 0.9438985868423838,
+    "accuracy_at_0_5": 0.9011231817344872
+  },
+  "selected_checkpoint_validation_study_metrics": {
+    "auc": 0.9483527796842828,
+    "accuracy_at_0_5": 0.75
+  },
+  "test_loss": 0.2507412319309626,
+  "test_slice_metrics": {
+    "auc": 0.9422646526032841,
+    "accuracy_at_0_5": 0.897181729834791
+  },
+  "test_study_metrics_max_slice_score": {
+    "auc": 0.9346938775510204,
+    "accuracy_at_0_5": 0.7414965986394558
+  },
+  "validation_selected_study_threshold": 0.906055212020874,
+  "validation_study_accuracy_at_selected_threshold": 0.8974358974358975,
+  "test_study_accuracy_at_validation_selected_threshold": 0.8503401360544217,
+  "epoch_history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.7972228375293162,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.5656320437681958,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.921282914784221,
+        "accuracy_at_0_5": 0.7560301970171239
+      },
+      "validation_study_metrics": {
+        "auc": 0.8838366506520247,
+        "accuracy_at_0_5": 0.41025641025641024
+      }
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.49451967537085134,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.26917193092020303,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9459555194405739,
+        "accuracy_at_0_5": 0.885104032406555
+      },
+      "validation_study_metrics": {
+        "auc": 0.940974605353466,
+        "accuracy_at_0_5": 0.6666666666666666
+      }
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.359697317620898,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.3236864264239064,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9490549383263567,
+        "accuracy_at_0_5": 0.8652181918615356
+      },
+      "validation_study_metrics": {
+        "auc": 0.9354838709677419,
+        "accuracy_at_0_5": 0.5641025641025641
+      }
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.3425097080862085,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.2397862242459647,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9438985868423838,
+        "accuracy_at_0_5": 0.9011231817344872
+      },
+      "validation_study_metrics": {
+        "auc": 0.9483527796842828,
+        "accuracy_at_0_5": 0.75
+      }
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.25699408706210297,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.3020501615334857,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9448596713600247,
+        "accuracy_at_0_5": 0.8874976983980851
+      },
+      "validation_study_metrics": {
+        "auc": 0.9373713109128345,
+        "accuracy_at_0_5": 0.6153846153846154
+      }
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.1879964963574494,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.32906319362657904,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9406176234116641,
+        "accuracy_at_0_5": 0.8795801878107162
+      },
+      "validation_study_metrics": {
+        "auc": 0.9401166781056967,
+        "accuracy_at_0_5": 0.5897435897435898
+      }
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.13535017866439022,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.26417770835736815,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9369938855682817,
+        "accuracy_at_0_5": 0.9097772049346345
+      },
+      "validation_study_metrics": {
+        "auc": 0.9243308167467399,
+        "accuracy_at_0_5": 0.7051282051282052
+      }
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.10555136755653828,
+      "train_decoded_slices": 29055,
+      "train_decode_failures": {
+        "ValueError": 10
+      },
+      "validation_loss": 0.2598146774111234,
+      "validation_decoded_slices": 5431,
+      "validation_decode_failures": {},
+      "validation_slice_metrics": {
+        "auc": 0.9285755977808361,
+        "accuracy_at_0_5": 0.9149327932240839
+      },
+      "validation_study_metrics": {
+        "auc": 0.918496911461908,
+        "accuracy_at_0_5": 0.75
+      }
+    }
+  ],
+  "warning": "Scores are experimental and are not clinically validated."
+}

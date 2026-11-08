@@ -1,0 +1,46 @@
+{
+  "scope": "research prototype; NOT FOR CLINICAL USE",
+  "score_semantics": "sigmoid outputs from the supplied model checkpoint; not clinically validated",
+  "model": {
+    "schema": "radar-ai.densenet121-ct-checkpoint/v2",
+    "model_id": "torchvision DenseNet121; ImageNet1K_V1 initialized and fine-tuned",
+    "training_data": "Brain_CT_data; binary instance labels from bags_train.csv",
+    "weights_sha256": "bfe085fa834b22cce142d261df37674c3a27dea05654549ee6e3e3f7a8e10c22",
+    "labels": [
+      "0",
+      "1"
+    ],
+    "preprocessing": {
+      "dicom_window_center": 40.0,
+      "dicom_window_width": 80.0,
+      "resize": 224,
+      "channels": "grayscale_repeated_rgb",
+      "normalization": "ImageNet mean/std"
+    },
+    "patient_grouped_split": true,
+    "validation_patient_count": 148,
+    "training_patient_count": 834
+  },
+  "checkpoint_path": "C:\\Users\\Iqbal Dovandra\\Project Code\\Kompe\\RADAR AI\\apps\\api\\data\\model-artifacts\\ct-binary-densenet121.pt",
+  "checkpoint_file_sha256": "06b26b4a2732bfaa5b1cdee36081908f0aae4c835a68006cc3884a0181390d0a",
+  "device": "cuda",
+  "preprocessing": {
+    "dicom_window_center": 40.0,
+    "dicom_window_width": 80.0,
+    "resize": [
+      224,
+      224
+    ],
+    "channels": "grayscale_repeated_rgb",
+    "normalization": "ImageNet mean/std"
+  },
+  "slices": [
+    {
+      "file": "ID_000854890.dcm",
+      "scores": {
+        "0": 0.5714595913887024,
+        "1": 0.4285404086112976
+      }
+    }
+  ]
+}
