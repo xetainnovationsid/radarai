@@ -17,6 +17,7 @@ import {
   CRANIAL_WINDOW_PRESETS,
   type WindowPreset,
 } from "@/components/CornerstoneViewport";
+import { DisclaimerBanner } from "@/components/DisclaimerBanner";
 import { FindingsSidebar } from "@/components/FindingsSidebar";
 import {
   API_BASE,
@@ -597,6 +598,8 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
         <span className="clinical-environment">Research environment <span>·</span> No clinical use</span>
         <span className="clinical-safety-badge"><i aria-hidden="true" />Research only</span>
       </header>
+
+      <DisclaimerBanner />
 
       {loading && <p role="status">Memuat studi dan referensi irisan…</p>}
 
