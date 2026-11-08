@@ -1,47 +1,47 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/AuthContext";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Triage Dashboard" },
-  { href: "/system", label: "System & Security Status" },
+  { href: "/", label: "Workspace", icon: "/figma/f33da.svg" },
+  { href: "/studies", label: "Studies", icon: "/figma/ed921.svg" },
+  { href: "/studies?status=ready", label: "Review", icon: "/figma/d8e0f.svg" },
+  { href: "/system", label: "System", icon: "/figma/0c433.svg" },
 ];
 
 export function HeaderNav() {
   const pathname = usePathname();
   const { user, loading, signOut } = useAuth();
   const isLoginPage = pathname === "/login";
+  const isStudyDetailPage = pathname.startsWith("/studies/") && pathname !== "/studies";
+  const [reviewQueueActive, setReviewQueueActive] = useState(false);
+
+  useEffect(() => {
+    setReviewQueueActive(new URLSearchParams(window.location.search).get("status") === "ready");
+  }, [pathname]);
+
+  if (isStudyDetailPage) return null;
 
   return (
     <header className="app-header">
       <div className="header-inner">
-        <div className="brand-group">
-          <Link href={user ? "/" : "/login"} className="brand-group" aria-label="RADAR AI Home">
-            <div className="brand-mark" aria-hidden="true">
-              R
-            </div>
-            <div>
-              <span className="brand-title">
-                RADAR AI
-                <span className="badge badge-neutral mono">CT Research</span>
-              </span>
-              <span className="brand-subtitle">
-                Brain CT Review Assistance • Meta AI Hackathon 2026
-              </span>
-            </div>
-          </Link>
-        </div>
+        <Link href={user ? "/" : "/login"} className="brand-group" aria-label="RADAR AI home">
+          <span className="brand-mark" aria-hidden="true">R</span>
+          <span className="brand-wordmark">radar <span>AI</span></span>
+        </Link>
 
-        {!isLoginPage && user && (
+        {!isLoginPage && (
           <nav aria-label="Primary navigation">
             <ul className="nav-links">
               {NAV_ITEMS.map((item) => {
-                const isActive =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.href.split("/").slice(0, 2).join("/"));
+                const isActive = item.href === "/"
+                  ? pathname === "/"
+                  : item.href === "/system"
+                    ? pathname.startsWith("/system")
+                    : pathname.startsWith("/studies") && item.label === (reviewQueueActive ? "Review" : "Studies");
                 return (
                   <li key={item.href}>
                     <Link
@@ -49,6 +49,7 @@ export function HeaderNav() {
                       className={`nav-link ${isActive ? "nav-link-active" : ""}`}
                       aria-current={isActive ? "page" : undefined}
                     >
+                      <img src={item.icon} alt="" aria-hidden="true" />
                       {item.label}
                     </Link>
                   </li>
@@ -58,32 +59,35 @@ export function HeaderNav() {
           </nav>
         )}
 
-        <div className="header-meta">
-          {loading ? (
-            <span className="badge badge-neutral">Memeriksa sesi…</span>
-          ) : user ? (
-            <>
-              <span className="badge badge-neutral" title={user.email ?? user.uid}>
-                {user.provider === "dev_mode" ? "Dev" : "OAuth"}:{" "}
-                {user.email ?? user.displayName ?? user.uid.slice(0, 8)}
-              </span>
-              <button
-                type="button"
-                className="button-secondary"
-                onClick={() => void signOut()}
-              >
-                Keluar
-              </button>
-            </>
-          ) : isLoginPage ? (
-            <span className="badge badge-neutral">Autentikasi Diperlukan</span>
-          ) : (
-            <Link href="/login" className="button-primary">
-              Masuk
-            </Link>
-          )}
-          <span>Research prototype</span>
-        </div>
+        {!isLoginPage && (
+          <div className="header-meta">
+            <span className="environment-label">Research environment</span>
+            {loading ? (
+              <span className="session-dot" role="status" aria-label="Memeriksa sesi" />
+            ) : user ? (
+              <div className="account-control">
+                <span className="account-name" title={user.email ?? user.uid}>
+                  {user.email ?? user.displayName ?? user.uid.slice(0, 8)}
+                </span>
+                <button
+                  type="button"
+                  className="user-avatar"
+                  onClick={() => void signOut()}
+                  aria-label="Keluar dari sesi peneliti"
+                  title="Keluar"
+                >
+                  <img src="/figma/d06c2.svg" alt="" aria-hidden="true" />
+                  <span>{(user.displayName ?? user.email ?? "ID").slice(0, 2).toUpperCase()}</span>
+                </button>
+              </div>
+            ) : (
+              <Link href="/login" className="user-avatar" aria-label="Masuk sebagai peneliti" title="Masuk">
+                <img src="/figma/d06c2.svg" alt="" aria-hidden="true" />
+                <span>ID</span>
+              </Link>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

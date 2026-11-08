@@ -17,7 +17,6 @@ import {
   CRANIAL_WINDOW_PRESETS,
   type WindowPreset,
 } from "@/components/CornerstoneViewport";
-import { DisclaimerBanner } from "@/components/DisclaimerBanner";
 import { FindingsSidebar } from "@/components/FindingsSidebar";
 import {
   API_BASE,
@@ -590,21 +589,14 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
   const reviewerId = user?.email ?? "local-reviewer";
 
   return (
-    <div className="viewer-shell">
-      <DisclaimerBanner />
-
-      <nav className="breadcrumbs viewer-breadcrumbs" aria-label="Breadcrumb">
-        <Link href="/">← Kembali ke daftar studi</Link>
-        <div className="breadcrumb-quick-links">
-          <span className="muted-copy">Fixture Referensi:</span>
-          <Link
-            href="/studies/00000000-0000-4000-8000-000000000001"
-            className="evidence-link"
-          >
-            CT-2026-0101 (5 Irisan DICOM)
-          </Link>
-        </div>
-      </nav>
+    <div className="viewer-shell clinical-viewer">
+      <header className="clinical-toolbar">
+        <Link href="/studies" className="clinical-back" aria-label="Back to study library">←</Link>
+        <Link href="/" className="clinical-wordmark" aria-label="RADAR AI workspace">radar</Link>
+        <div className="clinical-breadcrumb"><Link href="/studies">CT STUDIES</Link><span>/</span><span>CT-{studyCode}</span></div>
+        <span className="clinical-environment">Research environment <span>·</span> No clinical use</span>
+        <span className="clinical-safety-badge"><i aria-hidden="true" />Research only</span>
+      </header>
 
       {loading && <p role="status">Memuat studi dan referensi irisan…</p>}
 
