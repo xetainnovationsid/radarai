@@ -2,7 +2,6 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-import type { FormEvent } from "react";
 import { useAuth } from "@/components/AuthContext";
 
 function LoginForm() {
@@ -13,29 +12,10 @@ function LoginForm() {
     loading,
     firebaseConfigured,
     signInWithGoogle,
-    signInWithEmail,
-    signInWithDev,
   } = useAuth();
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-
-  async function handleEmailSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setAuthError("");
-    setSubmitting(true);
-    try {
-      await signInWithEmail(email, password);
-    } catch (err) {
-      setAuthError(
-        err instanceof Error ? err.message : "Gagal masuk dengan email."
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   async function handleGoogleLogin() {
     setAuthError("");
@@ -45,20 +25,6 @@ function LoginForm() {
     } catch (err) {
       setAuthError(
         err instanceof Error ? err.message : "Gagal masuk dengan Google OAuth."
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleDevLogin() {
-    setAuthError("");
-    setSubmitting(true);
-    try {
-      await signInWithDev();
-    } catch (err) {
-      setAuthError(
-        err instanceof Error ? err.message : "Gagal masuk dengan mode pengembang."
       );
     } finally {
       setSubmitting(false);
@@ -100,7 +66,7 @@ function LoginForm() {
           boxShadow: "0 18px 36px rgb(0 0 0 / 40%)",
         }}
       >
-        <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1.75rem" }}>
+        <div style={{ display: "grid", gap: "0.75rem" }}>
           <button
             type="button"
             className="button-primary"
@@ -141,104 +107,6 @@ function LoginForm() {
               Google OAuth memerlukan <code>NEXT_PUBLIC_FIREBASE_API_KEY</code> di <code>.env.local</code>.
             </p>
           )}
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            margin: "1.5rem 0",
-            color: "var(--text-muted)",
-            fontSize: "0.82rem",
-          }}
-        >
-          <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
-          <span style={{ padding: "0 0.85rem" }}>atau masuk dengan email terdaftar</span>
-          <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
-        </div>
-
-        <form onSubmit={handleEmailSubmit} style={{ display: "grid", gap: "1.1rem" }}>
-          <div>
-            <label htmlFor="login-email" style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
-              Email Peneliti
-            </label>
-            <input
-              id="login-email"
-              type="email"
-              required
-              autoComplete="username"
-              placeholder="peneliti@telkomuniversity.ac.id"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "0.75rem 0.9rem",
-                borderRadius: "8px",
-                border: "1px solid var(--border-subtle)",
-                background: "var(--bg-primary)",
-                color: "var(--text-primary)",
-                fontSize: "0.95rem",
-              }}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="login-password" style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
-              Kata Sandi
-            </label>
-            <input
-              id="login-password"
-              type="password"
-              required
-              autoComplete="current-password"
-              placeholder="••••••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "0.75rem 0.9rem",
-                borderRadius: "8px",
-                border: "1px solid var(--border-subtle)",
-                background: "var(--bg-primary)",
-                color: "var(--text-primary)",
-                fontSize: "0.95rem",
-              }}
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="button-primary"
-            disabled={submitting || !firebaseConfigured}
-            style={{ marginTop: "0.5rem", padding: "0.75rem" }}
-          >
-            {submitting ? "Memproses…" : "Masuk ke Workspace"}
-          </button>
-        </form>
-
-        <div
-          style={{
-            marginTop: "2rem",
-            paddingTop: "1.25rem",
-            borderTop: "1px dashed var(--border-subtle)",
-            textAlign: "center",
-          }}
-        >
-          <p className="eyebrow" style={{ justifyContent: "center", marginBottom: "0.4rem" }}>
-            KOLABORASI & PENGEMBANGAN TIM
-          </p>
-          <p className="muted-copy" style={{ fontSize: "0.82rem", marginBottom: "0.85rem" }}>
-            Bekerja bareng rekan tim secara lokal tanpa setup kunci Firebase? Gunakan sesi pengembang:
-          </p>
-          <button
-            type="button"
-            className="button-secondary"
-            disabled={submitting}
-            onClick={() => void handleDevLogin()}
-            style={{ width: "100%", padding: "0.65rem", fontSize: "0.88rem" }}
-          >
-            ⚡ Masuk Cepat sebagai Peneliti (Mode Dev/Demo)
-          </button>
         </div>
 
         {authError && (
