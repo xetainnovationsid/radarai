@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { Study, StudyStatus } from "@radar-ai/contracts";
 import { ErrorState } from "@/components/states/ErrorState";
@@ -40,8 +40,7 @@ function StudiesLibraryContent() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
+  const loadStudies = useCallback(async () => {
     try {
       const response = await apiFetch("/v1/studies");
       if (!response.ok) throw new Error(`Study library returned HTTP ${response.status}.`);
@@ -53,13 +52,21 @@ function StudiesLibraryContent() {
       setError(cause instanceof Error ? cause.message : "The study library could not be reached.");
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, []);
 
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadStudies();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadStudies]);
+
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void loadStudies();
+  }, [loadStudies]);
 
   const filteredStudies = useMemo(() => {
     const normalized = query.trim().toLowerCase();
