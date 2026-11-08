@@ -40,33 +40,48 @@ function StudiesLibraryContent() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadStudies = useCallback(async () => {
+  const fetchStudies = useCallback(async () => {
+    const response = await apiFetch("/v1/studies");
+    if (!response.ok) throw new Error(`Study library returned HTTP ${response.status}.`);
+    return (await response.json()) as Study[];
+  }, []);
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const response = await apiFetch("/v1/studies");
-      if (!response.ok) throw new Error(`Study library returned HTTP ${response.status}.`);
-      const data = (await response.json()) as Study[];
+      const data = await fetchStudies();
       setStudies(data);
       setSelectedStudyId((current) => current || data[0]?.study_id || "");
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The study library could not be reached.");
     } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await loadStudies();
-    } finally {
       setRefreshing(false);
     }
-  }, [loadStudies]);
+  }, [fetchStudies]);
 
   useEffect(() => {
-    void loadStudies();
-  }, [loadStudies]);
+    let cancelled = false;
+
+    void fetchStudies()
+      .then((data) => {
+        if (cancelled) return;
+        setStudies(data);
+        setSelectedStudyId((current) => current || data[0]?.study_id || "");
+        setError("");
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setError(cause instanceof Error ? cause.message : "The study library could not be reached.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchStudies]);
 
   const filteredStudies = useMemo(() => {
     const normalized = query.trim().toLowerCase();
