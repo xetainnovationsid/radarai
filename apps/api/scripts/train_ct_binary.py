@@ -318,8 +318,14 @@ def _train_epoch(
     device: torch.device,
     seed: int,
     log_every: int = 500,
+    freeze_batchnorm_stats: bool = False,
+    horizontal_flip_probability: float = 0.0,
 ) -> tuple[float, int, dict[str, int]]:
     model.train()
+    if freeze_batchnorm_stats:
+        for module in model.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.eval()
     total_loss = 0.0
     count = 0
     decode_errors: Counter[str] = Counter()
@@ -331,6 +337,9 @@ def _train_epoch(
         decode_errors=decode_errors,
     ):
         inputs = inputs_cpu.to(device)
+        if horizontal_flip_probability > 0:
+            flip_mask = torch.rand(inputs.shape[0], device=device) < horizontal_flip_probability
+            inputs[flip_mask] = torch.flip(inputs[flip_mask], dims=(-1,))
         targets = targets_cpu.to(device=device, dtype=torch.float32)
         optimizer.zero_grad(set_to_none=True)
         logits = model(inputs).squeeze(1)
@@ -386,17 +395,39 @@ def main() -> int:
     parser.add_argument("--validation-fraction", type=float, default=0.15)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--resume-checkpoint", type=Path)
+    parser.add_argument(
+        "--freeze-batchnorm-stats",
+        action="store_true",
+        help="Keep pretrained/fine-tuned BatchNorm running statistics fixed while training",
+    )
+    parser.add_argument(
+        "--horizontal-flip-probability",
+        type=float,
+        default=0.0,
+        help="Apply a label-preserving horizontal flip to each training slice with this probability",
+    )
     parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--seed", type=int, default=20261026)
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     args = parser.parse_args()
-    if args.epochs < 1 or args.batch_size < 1 or args.learning_rate <= 0 or args.log_every < 0:
+    if (
+        args.epochs < 1
+        or args.batch_size < 1
+        or args.learning_rate <= 0
+        or args.log_every < 0
+        or not 0.0 <= args.horizontal_flip_probability <= 1.0
+    ):
         parser.error(
             "epochs, batch size, and learning rate must be positive; "
-            "log-every cannot be negative"
+            "log-every cannot be negative and horizontal-flip-probability must be between 0 and 1"
         )
     if args.device == "cuda" and not torch.cuda.is_available():
         parser.error("CUDA was requested, but torch.cuda.is_available() is false")
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.device == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
     device = torch.device(args.device)
     try:
         train_records = load_labeled_split(args.data_root, "train")
@@ -422,7 +453,9 @@ def main() -> int:
         negative = len(training) - positive
         if positive == 0 or negative == 0:
             raise ValueError("Training partition must contain both labels")
-        weights = DenseNet121_Weights.DEFAULT
+        # A resumed checkpoint already contains the fine-tuned parameters, so
+        # avoid downloading and initializing ImageNet weights again.
+        weights = None if args.resume_checkpoint else DenseNet121_Weights.DEFAULT
         model = densenet121(weights=weights)
         pretrained_sha256 = state_dict_sha256(model.state_dict())
         model.classifier = nn.Linear(model.classifier.in_features, 1)
@@ -471,6 +504,8 @@ def main() -> int:
                 device=device,
                 seed=args.seed + start_epoch + epoch,
                 log_every=args.log_every,
+                freeze_batchnorm_stats=args.freeze_batchnorm_stats,
+                horizontal_flip_probability=args.horizontal_flip_probability,
             )
             (
                 validation_loss,
@@ -522,6 +557,8 @@ def main() -> int:
                     "labels": list(BINARY_LABELS),
                     "preprocessing": PREPROCESSING,
                     "patient_grouped_split": True,
+                    "batchnorm_stats_frozen_during_training": args.freeze_batchnorm_stats,
+                    "horizontal_flip_probability": args.horizontal_flip_probability,
                     "validation_patient_count": len(validation_patients),
                     "training_patient_count": len({r.patient_id for r in training}),
                 }

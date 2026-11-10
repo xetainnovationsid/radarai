@@ -29,6 +29,23 @@ public deployment. A public environment needs an operator-selected host, TLS, DN
 environment-specific CORS, backups, and a provisioned research checkpoint. No cloud credentials or
 production domain are configured in this repository, so no public deployment has been made.
 
+## Vercel frontend and public API
+
+Vercel deploys `apps/web` (Next.js); it does not start the FastAPI Docker service in
+`apps/api/Dockerfile`. Deploy that API container separately to a host that supports long-running
+Docker services, persistent private-image storage, and the provisioned model files. Configure
+`NEXT_PUBLIC_API_BASE_URL` on the Vercel project to the API's public HTTPS origin, then redeploy the
+frontend because Next.js embeds this public variable into the browser bundle. Do not leave it empty,
+set it to `localhost`, or keep the `https://api.example.com` sample value.
+
+On the API host, set `RADAR_WEB_ORIGINS` to the exact Vercel production and preview origins that
+need access, set production Firebase verification values, set a persistent PostgreSQL `DATABASE_URL`,
+and mount the model-artifacts directory read-only at the configured checkpoint path. Keep private
+DICOM files on a persistent volume and back them up together with PostgreSQL. Verify
+`https://<api-origin>/health/ready`, then use the web app's System page to check `/health` and
+`/v1/auth/me`. Vercel Functions have a 4.5 MB request and response body limit, while the API accepts
+DICOM series up to 512 MB, so route uploads directly from the browser to the separately hosted API.
+
 ## Study and inference operations
 
 1. Create a study and upload a synthetic or properly de-identified CT series.

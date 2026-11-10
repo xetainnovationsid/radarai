@@ -5,9 +5,38 @@
 import type { Study } from "@radar-ai/contracts";
 import { getValidIdToken } from "@/lib/firebase-auth";
 
+const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ?? "";
 export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
+  configuredApiBase ||
+  (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "")
 ).replace(/\/+$/, "");
+
+function assertApiBaseConfigured(): void {
+  if (!API_BASE) {
+    throw new Error(
+      "API belum dikonfigurasi. Set NEXT_PUBLIC_API_BASE_URL di Vercel ke URL backend FastAPI yang aktif."
+    );
+  }
+
+  let apiUrl: URL;
+  try {
+    apiUrl = new URL(API_BASE);
+  } catch {
+    throw new Error(
+      "NEXT_PUBLIC_API_BASE_URL harus berupa URL lengkap backend, misalnya https://api.domainmu."
+    );
+  }
+
+  if (apiUrl.hostname === "example.com" || apiUrl.hostname.endsWith(".example.com")) {
+    throw new Error(
+      "NEXT_PUBLIC_API_BASE_URL masih memakai alamat contoh. Ganti dengan URL backend FastAPI yang aktif."
+    );
+  }
+
+  if (process.env.NODE_ENV === "production" && apiUrl.protocol !== "https:") {
+    throw new Error("URL backend production harus memakai HTTPS.");
+  }
+}
 
 export interface UploadProgress {
   loaded: number;
@@ -93,6 +122,7 @@ export async function apiFetch(
   if (!path.startsWith("/")) {
     throw new Error("API path harus diawali dengan '/'.");
   }
+  assertApiBaseConfigured();
   const headers = new Headers(init.headers);
   headers.set("X-Requested-With", "XMLHttpRequest");
 
@@ -243,6 +273,7 @@ export async function uploadDicomSeriesWithProgress(
   onProgress?: (progress: UploadProgress) => void,
   signal?: AbortSignal
 ): Promise<Study> {
+  assertApiBaseConfigured();
   const safeStudyId = assertValidUuid(studyId, "Study ID");
   const token = await getValidIdToken();
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);

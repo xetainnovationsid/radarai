@@ -23,7 +23,11 @@ export default function SystemStatusPage() {
 
   async function checkHealth() {
     setStatus("checking");
-    setDetail(`Checking ${API_BASE}/health and /v1/auth/me…`);
+    setDetail(
+      API_BASE
+        ? `Checking ${API_BASE}/health and /v1/auth/me…`
+        : "Checking backend configuration…"
+    );
     try {
       const response = await apiFetch("/health");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
