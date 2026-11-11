@@ -9,10 +9,10 @@ local database are excluded from the build context.
 
 Set `POSTGRES_PASSWORD` to a long URL-safe secret, `RADAR_API_KEYS` to a separate random key for
 server-to-server use, and `RADAR_WEB_ORIGINS` to the exact frontend origins. Set Firebase project
-configuration to enable browser login. To enable Meta report drafting, set `MODEL_API_KEY` only in
-the API environment. Mount a compatible checkpoint into the configured read-only model directory
-to enable local inference. Neither Meta nor local model inference is faked when configuration is
-missing.
+configuration to enable browser login. To enable DeepSeek V4.1 Flash report drafting, set
+`DEEPSEEK_API_KEY` only in the API environment and leave `RADAR_MODEL_ID=deepseek-flash`. Mount a
+compatible checkpoint into the configured read-only model directory to enable local inference.
+Neither DeepSeek nor local model inference is faked when configuration is missing.
 
 ```powershell
 $env:POSTGRES_PASSWORD = "use-a-long-url-safe-random-value"
@@ -29,22 +29,21 @@ public deployment. A public environment needs an operator-selected host, TLS, DN
 environment-specific CORS, backups, and a provisioned research checkpoint. No cloud credentials or
 production domain are configured in this repository, so no public deployment has been made.
 
-## Vercel frontend and public API
+## Vercel frontend and backend API project
 
-Vercel deploys `apps/web` (Next.js); it does not start the FastAPI Docker service in
-`apps/api/Dockerfile`. Deploy that API container separately to a host that supports long-running
-Docker services, persistent private-image storage, and the provisioned model files. Configure
-`NEXT_PUBLIC_API_BASE_URL` on the Vercel project to the API's public HTTPS origin, then redeploy the
-frontend because Next.js embeds this public variable into the browser bundle. Do not leave it empty,
-set it to `localhost`, or keep the `https://api.example.com` sample value.
+Vercel has a dedicated `radar-ai-backend` project with `apps/api` as its root, separate from the
+`radarai-xeta` Next.js frontend. Configure `NEXT_PUBLIC_API_BASE_URL` on the frontend project to the
+backend's public HTTPS origin, then redeploy the frontend because Next.js embeds this public variable
+into the browser bundle. Do not leave it empty, set it to `localhost`, or keep the
+`https://api.example.com` sample value.
 
-On the API host, set `RADAR_WEB_ORIGINS` to the exact Vercel production and preview origins that
-need access, set production Firebase verification values, set a persistent PostgreSQL `DATABASE_URL`,
-and mount the model-artifacts directory read-only at the configured checkpoint path. Keep private
-DICOM files on a persistent volume and back them up together with PostgreSQL. Verify
+On the API project, set `RADAR_WEB_ORIGINS` to the exact Vercel frontend origin, production Firebase
+verification values, `DATABASE_URL`, and `DEEPSEEK_API_KEY`. Provision a compatible model checkpoint
+for CT inference. Vercel Functions have a 4.5 MB request and response body limit and ephemeral local
+storage; the existing DICOM upload and inference flows need persistent object storage and an upload
+path that bypasses the function payload limit before the backend can serve the full app. Verify
 `https://<api-origin>/health/ready`, then use the web app's System page to check `/health` and
-`/v1/auth/me`. Vercel Functions have a 4.5 MB request and response body limit, while the API accepts
-DICOM series up to 512 MB, so route uploads directly from the browser to the separately hosted API.
+`/v1/auth/me`.
 
 ## Study and inference operations
 

@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     UniqueConstraint,
     Uuid,
@@ -35,6 +36,7 @@ class StudyRecord(Base):
     modality: Mapped[str] = mapped_column(String(8), nullable=False, default="CT")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="uploaded")
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="local-reviewer")
+    upload_expected_slices: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -70,6 +72,7 @@ class StudySliceRecord(Base):
         nullable=False,
     )
     z_position_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dicom_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     study: Mapped[StudyRecord] = relationship(back_populates="slices")
     image_asset: Mapped["ImageAssetRecord"] = relationship(back_populates="slices")
 
@@ -84,6 +87,9 @@ class ImageAssetRecord(Base):
     storage_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dicom_data: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, deferred=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -127,6 +133,9 @@ class InferenceJobRecord(Base):
     requested_by: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     error_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -206,6 +215,32 @@ class StudyAnalysisRecord(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
     model_version: Mapped[ModelVersionRecord] = relationship(back_populates="analyses")
+
+
+class StudyLocalizationRecord(Base):
+    __tablename__ = "study_localizations"
+    __table_args__ = (
+        CheckConstraint(
+            "threshold > 0 AND threshold < 1", name="ck_study_localizations_threshold"
+        ),
+        Index("ix_study_localizations_study_created", "study_id", "created_at"),
+    )
+
+    localization_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4
+    )
+    study_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("studies.study_id", ondelete="CASCADE"), nullable=False
+    )
+    model_version_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("model_versions.model_version_id"), nullable=False
+    )
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    slices: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    model_version: Mapped[ModelVersionRecord] = relationship()
 
 
 class PersistedFindingRecord(Base):

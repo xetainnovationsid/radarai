@@ -65,9 +65,9 @@ identity in the append-only audit log. Offline DenseNet121 scoring is available 
 `apps/api/scripts/score_ct.py` when a compatible, locally provisioned checkpoint is supplied. The
 API runs inference as a pollable job and persists per-slice scores with checkpoint hash, model ID,
 preprocessing version, and device. No checkpoint is shipped, so operators must provision a
-validated research checkpoint before inference can complete. Meta report generation is optional;
-without a server-side `MODEL_API_KEY`, the API accepts a source-cited manual draft. This remains a
-research prototype, not for clinical use.
+validated research checkpoint before inference can complete. DeepSeek V4.1 Flash report drafting is
+optional; configure `DEEPSEEK_API_KEY` on the API server to enable generated drafts. Without it, the
+API accepts a source-cited manual draft. This remains a research prototype, not for clinical use.
 
 ## Quality checks
 

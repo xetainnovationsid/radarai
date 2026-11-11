@@ -7,7 +7,7 @@ interface ErrorStateProps {
 
 export function ErrorState({
   title = "Unable to Retrieve Study Analysis Payload",
-  message = "The Meta Model API or RADAR backend service returned an unavailable status. In compliance with safety guidelines, RADAR AI does not substitute unvalidated inference when the model service is unreachable.",
+  message = "The DeepSeek API or RADAR backend service returned an unavailable status. RADAR AI does not substitute unvalidated inference when the model service is unreachable.",
   errorCode = "ERR_RADAR_UPSTREAM_503",
   onRetry,
 }: ErrorStateProps) {

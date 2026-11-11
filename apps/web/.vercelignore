@@ -1,0 +1,3 @@
+public/fixtures/dicom/**
+**/*.dcm
+**/*.dicom

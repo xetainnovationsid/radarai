@@ -351,7 +351,7 @@ export function ReportEditor({
     );
   }
 
-  async function handleGenerateMetaDraft() {
+  async function handleGenerateDeepSeekDraft() {
     if (!analysis?.findings.length) {
       setActionError("Belum ada temuan tersimpan sebagai sumber draf laporan.");
       setActionErrorCode("ERR_REPORT_SOURCE_REQUIRED");
@@ -378,7 +378,7 @@ export function ReportEditor({
         };
       };
       if (!response.ok || !result.content || !result.report_id) {
-        throw new Error(result.detail ?? `Draf Meta gagal dibuat (HTTP ${response.status}).`);
+        throw new Error(result.detail ?? `Draf DeepSeek gagal dibuat (HTTP ${response.status}).`);
       }
       const findingText = result.content.findings
         ?.map((item) => `${item.text} [Temuan: ${item.finding_ids.join(", ")}]`)
@@ -391,7 +391,7 @@ export function ReportEditor({
         impression: result.content.impression
           ? `${result.content.impression.text} [Temuan: ${result.content.impression.finding_ids.join(", ")}]`
           : draft.impression,
-        reviewer_notes: `${draft.reviewer_notes.trim()}\nMeta model: ${result.model_id ?? "unknown"}. Draf masih memerlukan review manusia.`.trim(),
+        reviewer_notes: `${draft.reviewer_notes.trim()}\nDeepSeek API model: ${result.model_id ?? "unknown"}. Draf masih memerlukan review manusia.`.trim(),
         status: "draft",
         reviewer_id: reviewerId,
         updated_at: nowIso,
@@ -399,11 +399,11 @@ export function ReportEditor({
       };
       persistDraft(
         nextDraft,
-        `Draf Meta v${result.version ?? "?"} tersimpan di API. Periksa kutipan dan edit sebelum review.`
+        `Draf DeepSeek v${result.version ?? "?"} tersimpan di API. Periksa kutipan dan edit sebelum review.`
       );
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "Draf Meta tidak dapat dibuat.");
-      setActionErrorCode("ERR_META_REPORT_DRAFT");
+      setActionError(cause instanceof Error ? cause.message : "Draf DeepSeek tidak dapat dibuat.");
+      setActionErrorCode("ERR_DEEPSEEK_REPORT_DRAFT");
     } finally {
       setSavingToApi(false);
     }
@@ -638,18 +638,18 @@ export function ReportEditor({
           type="button"
           className="button-primary button-sm"
           onClick={handleSynthesizeFromAi}
-          title="Sintesis ulang draf otomatis dari temuan model, skor DenseNet121, dan lokalisasi SAMIHS"
+          title="Susun draf dari temuan, skor DenseNet121, dan lokalisasi SAMIHS yang sudah tersimpan"
         >
-          ✨ Buat / Perbarui Draf dari AI
+          Susun Draf dari Analisis Tersimpan
         </button>
         <button
           type="button"
           className="button-primary button-sm"
-          onClick={() => void handleGenerateMetaDraft()}
+          onClick={() => void handleGenerateDeepSeekDraft()}
           disabled={savingToApi || !analysis?.findings.length}
-          title="Minta Meta membuat draf terstruktur dari temuan tersimpan saja"
+          title="Kirim permintaan ke endpoint backend; backend memakai DEEPSEEK_API_KEY untuk membuat draf dari temuan tersimpan"
         >
-          {savingToApi ? "Menyimpan…" : "Buat Draf Meta"}
+          {savingToApi ? "Meminta DeepSeek…" : "Buat Draf DeepSeek"}
         </button>
         <button
           type="button"

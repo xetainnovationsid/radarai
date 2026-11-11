@@ -24,7 +24,7 @@ export interface CreateStudyRequest {
 
 export interface ModelVersion {
   model_version_id: string;
-  provider: "meta_model_api" | "local_checkpoint" | "approved_alternate" | "demo_fixture";
+  provider: "deepseek_api" | "local_checkpoint" | "approved_alternate" | "demo_fixture";
   model_id: string;
   prompt_version: string;
   preprocessing_version?: string | null;

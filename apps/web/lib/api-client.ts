@@ -79,7 +79,8 @@ const UUID_REGEX =
 
 export const CLIENT_UPLOAD_LIMITS = {
   maxFiles: 512,
-  maxFileBytes: 64 * 1024 * 1024,
+  // Each DICOM is a separate request so it stays below Vercel's 4.5 MB limit.
+  maxFileBytes: 4 * 1024 * 1024,
   maxSeriesBytes: 512 * 1024 * 1024,
 } as const;
 
@@ -233,7 +234,7 @@ export async function validateDicomFilesBeforeUpload(
     }
     if (file.size > CLIENT_UPLOAD_LIMITS.maxFileBytes) {
       throw new Error(
-        `File "${file.name}" melebihi batas ukuran per file (maksimal 64 MB).`
+        `File "${file.name}" melebihi batas ukuran per file (maksimal 4 MB per irisan di Vercel).`
       );
     }
     totalBytes += file.size;
@@ -277,12 +278,20 @@ export async function uploadDicomSeriesWithProgress(
   const safeStudyId = assertValidUuid(studyId, "Study ID");
   const token = await getValidIdToken();
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-  const formData = new FormData();
-  for (const file of files) {
-    formData.append("files", file);
-  }
+  let loadedBeforeCurrent = 0;
+  let latestStudy: Study | null = null;
 
-  return new Promise<Study>((resolve, reject) => {
+  for (const [index, file] of files.entries()) {
+    if (signal?.aborted) {
+      throw new ApiUploadError("Unggahan dibatalkan oleh pengguna.", 0, "ERR_UPLOAD_ABORTED");
+    }
+    const formData = new FormData();
+    formData.append("files", file);
+    formData.append("index", String(index));
+    formData.append("total_files", String(files.length));
+    formData.append("finalize", String(index === files.length - 1));
+
+    latestStudy = await new Promise<Study>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/v1/studies/${safeStudyId}/dicom`, true);
     xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
@@ -312,10 +321,9 @@ export async function uploadDicomSeriesWithProgress(
 
     xhr.upload.onprogress = (event) => {
       if (!onProgress) return;
-      const total = event.lengthComputable && event.total > 0 ? event.total : totalBytes;
-      const loaded = Math.min(event.loaded, total);
-      const percent = total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 50;
-      onProgress({ loaded, total, percent });
+      const loaded = Math.min(loadedBeforeCurrent + event.loaded, totalBytes);
+      const percent = totalBytes > 0 ? Math.min(99, Math.round((loaded / totalBytes) * 100)) : 50;
+      onProgress({ loaded, total: totalBytes, percent });
     };
 
     xhr.onload = () => {
@@ -323,7 +331,6 @@ export async function uploadDicomSeriesWithProgress(
       if (status >= 200 && status < 300) {
         try {
           const study = JSON.parse(xhr.responseText) as Study;
-          onProgress?.({ loaded: totalBytes, total: totalBytes, percent: 100 });
           resolve(study);
         } catch {
           reject(
@@ -365,7 +372,7 @@ export async function uploadDicomSeriesWithProgress(
       if (status === 413) {
         reject(
           new ApiUploadError(
-            detail || "Ukuran file atau jumlah irisan DICOM melebihi batas maksimum server (64 MB/file, 512 MB/seri).",
+            detail || "Ukuran file atau jumlah irisan DICOM melebihi batas maksimum server (4 MB/file, 512 MB/seri).",
             413,
             "ERR_PAYLOAD_TOO_LARGE_413"
           )
@@ -410,7 +417,7 @@ export async function uploadDicomSeriesWithProgress(
     xhr.onerror = () => {
       reject(
         new ApiUploadError(
-          "Koneksi jaringan ke server API terputus saat mengunggah irisan DICOM. Pastikan layanan backend berjalan di port 8000.",
+          `Koneksi terputus saat mengunggah irisan ${index + 1} dari ${files.length}. Coba ulang; irisan yang sudah tersimpan akan dilanjutkan dengan aman.`,
           0,
           "ERR_NETWORK_DISCONNECTED"
         )
@@ -429,6 +436,17 @@ export async function uploadDicomSeriesWithProgress(
 
     xhr.send(formData);
   });
+
+    loadedBeforeCurrent += file.size;
+    onProgress?.({
+      loaded: loadedBeforeCurrent,
+      total: totalBytes,
+      percent: index === files.length - 1 ? 100 : Math.min(99, Math.round((loadedBeforeCurrent / totalBytes) * 100)),
+    });
+  }
+
+  if (!latestStudy) throw new ApiUploadError("Tidak ada file DICOM untuk diunggah.");
+  return latestStudy;
 }
 
 const DEMO_FIXTURE_FILES = [

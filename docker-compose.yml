@@ -28,8 +28,8 @@ services:
       FIREBASE_WEB_API_KEY: ${FIREBASE_WEB_API_KEY:-}
       RADAR_ALLOWED_EMAIL_DOMAINS: ${RADAR_ALLOWED_EMAIL_DOMAINS:-}
       RADAR_STORAGE_DIR: /var/lib/radar/private-images
-      MODEL_API_KEY: ${MODEL_API_KEY:-}
-      RADAR_MODEL_ID: ${RADAR_MODEL_ID:-muse-spark-1.3}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      RADAR_MODEL_ID: ${RADAR_MODEL_ID:-deepseek-flash}
       RADAR_CT_CHECKPOINT: /var/lib/radar/model-artifacts/ct-binary-densenet121.pt
       RADAR_TRUST_PROXY_HEADERS: ${RADAR_TRUST_PROXY_HEADERS:-false}
     ports:

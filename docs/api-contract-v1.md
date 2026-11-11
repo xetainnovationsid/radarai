@@ -34,8 +34,8 @@ This is the shared contract for the web and API workstreams in RDA-18. Python mo
   ],
   "model_version": {
     "model_version_id": "00000000-0000-4000-8000-000000000004",
-    "provider": "meta_model_api",
-    "model_id": "muse-spark-1.3",
+    "provider": "local_checkpoint",
+    "model_id": "radar-densenet121-ct",
     "prompt_version": "radar-findings-v1",
     "preprocessing_version": "densenet121-ct-preprocessing/v2",
     "artifact_sha256": "<checkpoint sha256>",
@@ -125,46 +125,31 @@ has a series returns `409`.
   metadata. The API rejects citations that do not exist in the saved analysis.
 - The output is an unsigned `draft`. Its statements must cite one or more source finding IDs; all
   drafts remain subject to human review and are research-only.
-- If Meta is not configured or unavailable, the endpoint returns `503` with a manual fallback
+- If DeepSeek is not configured or unavailable, the endpoint returns `503` with a manual fallback
   instruction. Send `manual_content` in the same request to store an explicitly manual, cited draft.
 - `GET /v1/studies/{study_id}/reports/drafts` returns immutable versioned drafts in newest-first
   order. A later manual or generated draft creates a new version.
 
-## Meta model access check
+## DeepSeek report drafting
 
-Meta's current Model API documents `https://api.meta.ai/v1`, bearer authentication using
-`MODEL_API_KEY`, `GET /models`, and OpenAI-compatible `POST /chat/completions`. The proposed
-text-only smoke-check model is `muse-spark-1.3`; the live model catalog is authoritative for what
-the account can use. The test sends only the synthetic prompt `Reply with the single word: ready`
-and never sends CT images or patient information.
+The generated draft endpoint calls DeepSeek's OpenAI-compatible API at
+`https://api.deepseek.com/chat/completions` with model slug `deepseek-flash` (DeepSeek V4.1 Flash).
+Set `DEEPSEEK_API_KEY` only in the API deployment environment. The service sends de-identified
+saved findings, requests JSON output, validates the response against `ReportContent`, and rejects
+citations that do not match saved findings. It never sends CT images or patient identifiers.
 
-References: [API reference](https://dev.meta.ai/docs/api-reference), [model catalog](https://dev.meta.ai/docs/models),
-[chat completions quickstart](https://dev.meta.ai/docs/cookbook/quickstart-chat-completions), and
-[pricing, usage, and rate limits](https://dev.meta.ai/docs/pricing-rate-limits).
+References: [model catalog](https://api-docs.deepseek.com/api/list-models/),
+[chat completions](https://api-docs.deepseek.com/api/create-chat-completion/), and
+[JSON output](https://api-docs.deepseek.com/guides/json_mode/).
 
-Run from `apps/api` after placing a Meta API key in the local environment (do not commit it):
-
-```powershell
-$env:MODEL_API_KEY = "<local key>"
-python scripts/check_meta_model_access.py
-```
-
-The script prints model availability, token usage, estimated Standard-mode cost, and available
-rate-limit headers. Cost estimate for Muse Spark 1.3 is calculated from current published rates:
-input `$1.25` / million tokens, cached input `$0.15` / million tokens, and output `$4.25` /
-million tokens. Rates and model availability can change; confirm them in the Meta dashboard before
-budgeting. The API reports per-request token usage, while rate limits are shared per team.
-
-**Live access was not tested for this repository** because no `MODEL_API_KEY` is configured. Set
-one locally and run the command above to complete the account-specific check. Never paste the key
-into chat, a PR, or source control.
+To check account access with a synthetic text-only request, set `DEEPSEEK_API_KEY` locally and run
+`python scripts/check_deepseek_model_access.py` from `apps/api`. Never commit or paste the key.
 
 ## Fallback and safety
 
-- If Meta is unavailable, return an explicit unavailable/error state; do not silently mark an
+- If DeepSeek is unavailable, return an explicit unavailable/error state; do not silently mark an
   unvalidated model or static fixture as real inference.
 - A `demo_fixture` provider is permitted only for synthetic demonstration data and must remain
   visibly marked as a fixture. Production/demo integrations can use an `approved_alternate` only
   after its access, cost, contract compatibility, and research validation are recorded.
-- Use Standard mode for any approved integration. Do not use Contributor mode for any RADAR data.
 - This is research prototyping only, not for clinical use. All model outputs require human review.

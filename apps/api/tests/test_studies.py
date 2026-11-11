@@ -1,7 +1,10 @@
 import time
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from uuid import UUID
+import hashlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,8 +26,14 @@ from radar_api.database import Base, get_session
 from radar_api.inference_service import ModelUnavailableError
 from radar_api.main import app
 from radar_api.models import (
+    FindingEvidenceRecord,
     ImageAssetRecord,
+    InferenceJobRecord,
     InferenceScoreRecord,
+    ModelVersionRecord,
+    PersistedFindingRecord,
+    StudyAnalysisRecord,
+    StudyRecord,
 )
 from radar_api.security import rate_limiter
 from radar_api.storage import PrivateImageStore
@@ -141,6 +150,57 @@ def create_study() -> str:
     return response.json()["study_id"]
 
 
+def upload_dicom_files(study_id: str, files: list[tuple[str, bytes, str]]):
+    """Upload slices with the resumable one-file-per-request API contract."""
+    response = None
+    for index, (filename, payload, content_type) in enumerate(files):
+        response = client.post(
+            f"/v1/studies/{study_id}/dicom",
+            files={"files": (filename, payload, content_type)},
+            data={
+                "index": str(index),
+                "total_files": str(len(files)),
+                "finalize": str(index == len(files) - 1).lower(),
+            },
+        )
+        if response.status_code != 201:
+            return response
+    assert response is not None
+    return response
+
+
+def seed_test_finding(study_id: str) -> str:
+    """Create an explicit test finding for report and review route unit tests."""
+    with TestSession() as session:
+        study = session.get(StudyRecord, UUID(study_id))
+        assert study is not None and study.slices
+        model = ModelVersionRecord(
+            provider="local_checkpoint",
+            model_id="test-densenet-v1",
+            prompt_version="ct-inference-v1",
+            preprocessing_version="densenet121-ct-preprocessing/v2",
+            artifact_sha256="a" * 64,
+            device="cpu",
+        )
+        session.add(model)
+        session.flush()
+        analysis = StudyAnalysisRecord(study_id=study.study_id, model_version_id=model.model_version_id)
+        session.add(analysis)
+        finding = PersistedFindingRecord(
+            study_id=study.study_id,
+            category="suspected_intracranial_hemorrhage",
+            confidence=0.84,
+            review_status="pending",
+            model_version_id=model.model_version_id,
+        )
+        finding.evidence.append(
+            FindingEvidenceRecord(slice_id=study.slices[2].slice_id)
+        )
+        session.add(finding)
+        session.commit()
+        return str(finding.finding_id)
+
+
 def test_upload_accepts_anonymized_ct_series_and_stores_privately(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -152,11 +212,11 @@ def test_upload_accepts_anonymized_ct_series_and_stores_privately(
     first = make_ct_dicom(z_position=5, study_uid=series_study_uid, series_uid=series_uid)
     second = make_ct_dicom(z_position=1, study_uid=series_study_uid, series_uid=series_uid)
 
-    response = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
-            ("files", ("../../first.dcm", first, "application/dicom")),
-            ("files", ("second.dcm", second, "application/dicom")),
+    response = upload_dicom_files(
+        study_id,
+        [
+            ("../../first.dcm", first, "application/dicom"),
+            ("second.dcm", second, "application/dicom"),
         ],
     )
 
@@ -171,12 +231,8 @@ def test_upload_accepts_anonymized_ct_series_and_stores_privately(
     with TestSession() as session:
         assets = list(session.scalars(select(ImageAssetRecord)).all())
     assert len(assets) == 2
-    store = PrivateImageStore(storage_root)
-    stored_paths = [store.path_for(asset.storage_key) for asset in assets]
-    assert all(
-        path.is_relative_to(storage_root.resolve()) and path.is_file() for path in stored_paths
-    )
-    assert {path.read_bytes() for path in stored_paths} == {first, second}
+    assert {asset.dicom_data for asset in assets} == {first, second}
+    assert all(asset.storage_key.startswith("supabase-db://") for asset in assets)
 
 
 @pytest.mark.parametrize(
@@ -205,6 +261,7 @@ def test_upload_rejects_corrupt_and_identifiable_files(
     response = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": (filename, payload, "application/dicom")},
+        data={"index": "0", "total_files": "1", "finalize": "true"},
     )
 
     assert response.status_code == 422
@@ -218,6 +275,7 @@ def test_upload_rejects_non_ct_series(tmp_path: Path, monkeypatch: pytest.Monkey
     response = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("image.dcm", make_ct_dicom(modality="MR"), "application/dicom")},
+        data={"index": "0", "total_files": "1", "finalize": "true"},
     )
 
     assert response.status_code == 422
@@ -230,39 +288,33 @@ def test_upload_rejects_files_from_different_series(
     monkeypatch.setenv("RADAR_STORAGE_DIR", str(tmp_path / "private"))
     study_id = create_study()
     series_study_uid = generate_uid()
-    response = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
+    response = upload_dicom_files(
+        study_id,
+        [
             (
-                "files",
-                (
-                    "first.dcm",
-                    make_ct_dicom(
-                        z_position=0,
-                        study_uid=series_study_uid,
-                        series_uid=generate_uid(),
-                    ),
-                    "application/dicom",
+                "first.dcm",
+                make_ct_dicom(
+                    z_position=0,
+                    study_uid=series_study_uid,
+                    series_uid=generate_uid(),
                 ),
+                "application/dicom",
             ),
             (
-                "files",
-                (
-                    "second.dcm",
-                    make_ct_dicom(
-                        z_position=1,
-                        study_uid=series_study_uid,
-                        series_uid=generate_uid(),
-                    ),
-                    "application/dicom",
+                "second.dcm",
+                make_ct_dicom(
+                    z_position=1,
+                    study_uid=series_study_uid,
+                    series_uid=generate_uid(),
                 ),
+                "application/dicom",
             ),
         ],
     )
 
     assert response.status_code == 422
     assert response.json()["detail"] == "DICOM files do not belong to the same CT series"
-    assert client.get(f"/v1/studies/{study_id}").json()["slices"] == []
+    assert len(client.get(f"/v1/studies/{study_id}").json()["slices"]) == 1
 
 
 def test_upload_enforces_size_limit_and_cleans_temporary_file(
@@ -276,6 +328,7 @@ def test_upload_enforces_size_limit_and_cleans_temporary_file(
     response = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("large.dcm", make_ct_dicom(), "application/dicom")},
+        data={"index": "0", "total_files": "1", "finalize": "true"},
     )
 
     assert response.status_code == 413
@@ -306,11 +359,9 @@ def test_web_fixture_series_upload_and_study_list_status_transition(
     assert len(initial_list) == 1
     assert initial_list[0]["status"] == "uploaded"
 
-    response = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
-            ("files", (path.name, path.read_bytes(), "application/dicom")) for path in fixture_files
-        ],
+    response = upload_dicom_files(
+        study_id,
+        [(path.name, path.read_bytes(), "application/dicom") for path in fixture_files],
     )
     assert response.status_code == 201
     updated = response.json()
@@ -331,21 +382,7 @@ def test_web_fixture_series_upload_and_study_list_status_transition(
     assert len(study_list[0]["slices"]) == 5
 
     analysis_resp = client.get(f"/v1/studies/{study_id}/analysis")
-    assert analysis_resp.status_code == 200
-    analysis = analysis_resp.json()
-    assert analysis["schema_version"] == "1.0.0"
-    assert analysis["model_version"]["provider"] == "demo_fixture"
-    assert analysis["model_version"]["model_id"] == "synthetic-fixture"
-    assert analysis["model_version"]["prompt_version"] == "demo-fixture-v1"
-    assert len(analysis["findings"]) == 1
-
-    finding = analysis["findings"][0]
-    expected_evidence_ids = {
-        updated["slices"][2]["slice_id"],
-        updated["slices"][3]["slice_id"],
-    }
-    assert set(finding["evidence_slice_ids"]) == expected_evidence_ids
-    assert finding["review_status"] == "pending"
+    assert analysis_resp.status_code == 404
 
     preview_resp = client.get(
         f"/v1/studies/{study_id}/slices/{updated['slices'][2]['slice_id']}/image"
@@ -360,25 +397,15 @@ def test_web_fixture_series_upload_and_study_list_status_transition(
     assert dicom_resp.headers["content-type"] == "application/dicom"
     assert dicom_resp.content == fixture_files[4].read_bytes()
 
-    review_resp = client.post(
-        f"/v1/studies/{study_id}/findings/{finding['finding_id']}/review",
-        json={"review_status": "accepted"},
-    )
-    assert review_resp.status_code == 201
-    assert review_resp.json()["previous_review_status"] == "pending"
-    assert review_resp.json()["review_status"] == "accepted"
-
-    # Uploading slice-4.dcm alone (Z=11.5mm, normal convexity) yields 0 findings
+    # Uploading a slice alone still yields no finding until a model runs.
     single_study_id = create_study()
-    single_upload = client.post(
-        f"/v1/studies/{single_study_id}/dicom",
-        files=[("files", ("slice-4.dcm", fixture_files[4].read_bytes(), "application/dicom"))],
+    single_upload = upload_dicom_files(
+        single_study_id,
+        [("slice-4.dcm", fixture_files[4].read_bytes(), "application/dicom")],
     )
     assert single_upload.status_code == 201
     single_analysis = client.get(f"/v1/studies/{single_study_id}/analysis")
-    assert single_analysis.status_code == 200
-    assert single_analysis.json()["findings"] == []
-    assert single_analysis.json()["model_version"]["provider"] == "demo_fixture"
+    assert single_analysis.status_code == 404
 
 
 def test_inference_job_persists_slice_scores_and_model_provenance(
@@ -391,11 +418,9 @@ def test_inference_job_persists_slice_scores_and_model_provenance(
     )
     fixture_files = sorted(fixture_dir.glob("slice-*.dcm"))
     study_id = create_study()
-    upload = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
-            ("files", (path.name, path.read_bytes(), "application/dicom")) for path in fixture_files
-        ],
+    upload = upload_dicom_files(
+        study_id,
+        [(path.name, path.read_bytes(), "application/dicom") for path in fixture_files],
     )
     assert upload.status_code == 201
 
@@ -448,6 +473,7 @@ def test_inference_job_records_model_unavailable_without_fake_analysis(
     upload = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("slice.dcm", make_ct_dicom(), "application/dicom")},
+        data={"index": "0", "total_files": "1", "finalize": "true"},
     )
     assert upload.status_code == 201
 
@@ -464,6 +490,81 @@ def test_inference_job_records_model_unavailable_without_fake_analysis(
     assert client.get(f"/v1/studies/{study_id}").json()["status"] == "failed"
 
 
+def test_laptop_worker_uses_fenced_lease_and_persists_real_endpoint_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "w" * 40
+    monkeypatch.setenv("RADAR_WORKER_TOKEN", token)
+    monkeypatch.setenv("RADAR_INFERENCE_MODE", "laptop_worker")
+    dicom_payload = make_ct_dicom()
+    study_id = create_study()
+    upload = upload_dicom_files(study_id, [("slice.dcm", dicom_payload, "application/dicom")])
+    assert upload.status_code == 201
+
+    queued = client.post(f"/v1/studies/{study_id}/inference-jobs")
+    assert queued.status_code == 202
+    job_id = queued.json()["job_id"]
+    worker_headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/internal/worker/health").status_code == 401
+
+    first_claim = client.post("/internal/worker/claim", headers=worker_headers)
+    assert first_claim.status_code == 200
+    first_job = first_claim.json()["job"]
+    assert first_job["job_id"] == job_id
+    first_lease = first_job["lease_token"]
+    slice_id = first_claim.json()["slices"][0]["slice_id"]
+
+    with TestSession() as session:
+        job = session.get(InferenceJobRecord, UUID(job_id))
+        assert job is not None
+        job.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+    second_claim = client.post("/internal/worker/claim", headers=worker_headers)
+    assert second_claim.status_code == 200
+    second_lease = second_claim.json()["job"]["lease_token"]
+    assert second_lease != first_lease
+
+    stale_headers = {**worker_headers, "X-RADAR-Worker-Lease": first_lease}
+    active_headers = {**worker_headers, "X-RADAR-Worker-Lease": second_lease}
+    stale_heartbeat = client.post(
+        f"/internal/worker/jobs/{job_id}/heartbeat", headers=stale_headers
+    )
+    assert stale_heartbeat.status_code == 409
+
+    download = client.get(
+        f"/internal/worker/jobs/{job_id}/slices/{slice_id}", headers=active_headers
+    )
+    assert download.status_code == 200
+    assert download.content == dicom_payload
+    assert download.headers["X-DICOM-SHA256"] == hashlib.sha256(dicom_payload).hexdigest()
+
+    completion = client.post(
+        f"/internal/worker/jobs/{job_id}/complete",
+        headers=active_headers,
+        json={
+            "model_id": "test-densenet-v1",
+            "checkpoint_sha256": "a" * 64,
+            "device": "cuda:0",
+            "slices": [{"slice_id": slice_id, "scores": {"0": 0.3, "1": 0.7}}],
+        },
+    )
+    assert completion.status_code == 200
+    scores = client.get(f"/v1/studies/{study_id}/scores")
+    assert scores.status_code == 200
+    assert scores.json()["slices"][0]["class_1_score"] == 0.7
+    assert client.post(
+        f"/internal/worker/jobs/{job_id}/complete",
+        headers=active_headers,
+        json={
+            "model_id": "test-densenet-v1",
+            "checkpoint_sha256": "a" * 64,
+            "device": "cuda:0",
+            "slices": [{"slice_id": slice_id, "scores": {"0": 0.3, "1": 0.7}}],
+        },
+    ).status_code == 409
+
+
 def test_manual_report_draft_is_versioned_and_rejects_unknown_citations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -473,14 +574,12 @@ def test_manual_report_draft_is_versioned_and_rejects_unknown_citations(
     )
     fixture_files = sorted(fixture_dir.glob("slice-*.dcm"))
     study_id = create_study()
-    upload = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
-            ("files", (path.name, path.read_bytes(), "application/dicom")) for path in fixture_files
-        ],
+    upload = upload_dicom_files(
+        study_id,
+        [(path.name, path.read_bytes(), "application/dicom") for path in fixture_files],
     )
     assert upload.status_code == 201
-    finding_id = client.get(f"/v1/studies/{study_id}/analysis").json()["findings"][0]["finding_id"]
+    finding_id = seed_test_finding(study_id)
     content = {
         "findings": [{"text": "Synthetic source-cited draft.", "finding_ids": [finding_id]}],
         "impression": {"text": "Requires human review.", "finding_ids": [finding_id]},
@@ -520,13 +619,12 @@ def test_finding_correction_is_versioned_and_audited(
     )
     fixture_files = sorted(fixture_dir.glob("slice-*.dcm"))
     study_id = create_study()
-    uploaded = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
-            ("files", (path.name, path.read_bytes(), "application/dicom")) for path in fixture_files
-        ],
+    uploaded = upload_dicom_files(
+        study_id,
+        [(path.name, path.read_bytes(), "application/dicom") for path in fixture_files],
     )
     assert uploaded.status_code == 201
+    seed_test_finding(study_id)
     finding = client.get(f"/v1/studies/{study_id}/analysis").json()["findings"][0]
     corrected = client.put(
         f"/v1/studies/{study_id}/findings/{finding['finding_id']}",
@@ -548,7 +646,7 @@ def test_finding_correction_is_versioned_and_audited(
     assert [item["version"] for item in reviews.json()] == [2]
 
 
-def test_meta_report_route_uses_only_deidentified_saved_findings(
+def test_deepseek_report_route_uses_only_deidentified_saved_findings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("RADAR_STORAGE_DIR", str(tmp_path / "private"))
@@ -557,17 +655,16 @@ def test_meta_report_route_uses_only_deidentified_saved_findings(
     )
     fixture_files = sorted(fixture_dir.glob("slice-*.dcm"))
     study_id = create_study()
-    uploaded = client.post(
-        f"/v1/studies/{study_id}/dicom",
-        files=[
-            ("files", (path.name, path.read_bytes(), "application/dicom")) for path in fixture_files
-        ],
+    uploaded = upload_dicom_files(
+        study_id,
+        [(path.name, path.read_bytes(), "application/dicom") for path in fixture_files],
     )
     assert uploaded.status_code == 201
+    seed_test_finding(study_id)
     finding = client.get(f"/v1/studies/{study_id}/analysis").json()["findings"][0]
     submitted_source: list[dict[str, object]] = []
 
-    def fake_meta_draft(source: list[dict[str, object]]) -> tuple[ReportContent, str]:
+    def fake_deepseek_draft(source: list[dict[str, object]]) -> tuple[ReportContent, str]:
         submitted_source.extend(source)
         finding_id = source[0]["finding_id"]
         return (
@@ -583,14 +680,14 @@ def test_meta_report_route_uses_only_deidentified_saved_findings(
                     "limitations": "Research prototype; not for clinical use.",
                 }
             ),
-            "mock-meta-model",
+            "mock-deepseek-model",
         )
 
-    monkeypatch.setattr(main_module, "generate_report_content", fake_meta_draft)
+    monkeypatch.setattr(main_module, "generate_report_content", fake_deepseek_draft)
     response = client.post(f"/v1/studies/{study_id}/reports/drafts", json={})
     assert response.status_code == 201
-    assert response.json()["generation_mode"] == "meta_model_api"
-    assert response.json()["model_id"] == "mock-meta-model"
+    assert response.json()["generation_mode"] == "deepseek_api"
+    assert response.json()["model_id"] == "mock-deepseek-model"
     assert submitted_source == [
         {
             "finding_id": finding["finding_id"],

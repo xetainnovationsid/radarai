@@ -38,8 +38,8 @@ def example_response() -> radar_api.contracts.StudyAnalysisResponse:
         ],
         model_version=radar_api.contracts.ModelVersion(
             model_version_id=MODEL_VERSION_ID,
-            provider="meta_model_api",
-            model_id="muse-spark-1.3",
+            provider="local_checkpoint",
+            model_id="radar-densenet121-ct",
             prompt_version="radar-findings-v1",
         ),
     )
@@ -52,7 +52,7 @@ def test_study_analysis_contract_serializes_versioned_typed_response() -> None:
     assert response["study"]["modality"] == "CT"
     assert response["findings"][0]["evidence_slice_ids"] == [str(SLICE_ID)]
     assert response["findings"][0]["review_status"] == "pending"
-    assert response["model_version"]["model_id"] == "muse-spark-1.3"
+    assert response["model_version"]["model_id"] == "radar-densenet121-ct"
 
 
 @pytest.mark.parametrize("confidence", [-0.01, 1.01])

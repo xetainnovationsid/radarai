@@ -50,7 +50,7 @@ class CreateStudyRequest(ContractModel):
 
 class ModelVersion(ContractModel):
     model_version_id: UUID
-    provider: Literal["meta_model_api", "local_checkpoint", "approved_alternate", "demo_fixture"]
+    provider: Literal["deepseek_api", "local_checkpoint", "approved_alternate", "demo_fixture"]
     model_id: str = Field(min_length=1)
     prompt_version: str = Field(min_length=1)
     preprocessing_version: str | None = None
@@ -129,7 +129,7 @@ class ReportDraft(ContractModel):
     content: ReportContent
     created_by: str
     created_at: datetime
-    generation_mode: Literal["meta_model_api", "manual_fallback"]
+    generation_mode: Literal["deepseek_api", "manual_fallback"]
     model_id: str | None = None
 
 

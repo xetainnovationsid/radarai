@@ -643,6 +643,20 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as error:
+            original = getattr(error, "orig", None)
+            diagnostic = getattr(original, "diag", None)
+            sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+            if sqlstate:
+                logger.error(
+                    "Unhandled API database exception request_id=%s method=%s "
+                    "sqlstate=%s table=%s column=%s constraint=%s",
+                    request_id,
+                    request.method.upper(),
+                    sqlstate,
+                    getattr(diagnostic, "table_name", None),
+                    getattr(diagnostic, "column_name", None),
+                    getattr(diagnostic, "constraint_name", None),
+                )
             logger.error(
                 "Unhandled API exception request_id=%s method=%s exception=%s",
                 request_id,

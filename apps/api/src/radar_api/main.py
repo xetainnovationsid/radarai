@@ -1,11 +1,13 @@
 import logging
+import tempfile
 from io import BytesIO
 from math import isclose
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
@@ -32,11 +34,6 @@ from radar_api.database import SessionLocal, get_session
 from radar_api.dicom_upload import UploadLimits, UploadTooLarge, stage_upload
 from radar_api.dicom_validation import DicomValidationError, validate_ct_slice
 from radar_api.inference_jobs import run_inference_job
-from radar_api.localization_service import (
-    LocalizationInputError,
-    LocalizationUnavailableError,
-    localize_dicom_series,
-)
 from radar_api.models import (
     FindingEvidenceRecord,
     ImageAssetRecord,
@@ -47,6 +44,7 @@ from radar_api.models import (
     ReportDraftRecord,
     ReviewEventRecord,
     StudyAnalysisRecord,
+    StudyLocalizationRecord,
     StudyRecord,
     StudySliceRecord,
 )
@@ -64,6 +62,17 @@ from radar_api.security import (
     require_authenticated_principal,
 )
 from radar_api.storage import PrivateImageStore
+from radar_api.worker_bridge import (
+    WorkerClaimRequest,
+    WorkerScores,
+    claim_next_job,
+    fail_worker_job,
+    get_job_slice,
+    heartbeat_worker_job,
+    persist_worker_scores,
+    require_worker_token,
+    worker_mode_enabled,
+)
 
 load_dotenv()
 logger = logging.getLogger("radar_api")
@@ -132,6 +141,105 @@ def readiness_check() -> dict[str, str]:
         logger.error("Readiness check failed with %s", type(error).__name__)
         raise HTTPException(status_code=503, detail="Database is unavailable") from error
     return {"status": "ready", "database": "ok"}
+
+
+@app.get("/internal/worker/health", tags=["operations"])
+def laptop_worker_health(request: Request) -> dict[str, str]:
+    """Private authenticated health check for the laptop inference worker."""
+    require_worker_token(request)
+    return {"status": "ready", "mode": "laptop_worker"}
+
+
+@app.post("/internal/worker/claim", tags=["operations"])
+def laptop_worker_claim(
+    request: Request,
+    payload: WorkerClaimRequest | None = None,
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """Lease a queued inference job to one authenticated laptop worker."""
+    require_worker_token(request)
+    job = claim_next_job(session, payload.study_id if payload else None)
+    if job is None:
+        return {"job": None}
+    slices = list(
+        session.scalars(
+            select(StudySliceRecord)
+            .where(StudySliceRecord.study_id == UUID(str(job["study_id"])))
+            .order_by(StudySliceRecord.index)
+        ).all()
+    )
+    return {
+        "job": job,
+        "slices": [{"slice_id": str(item.slice_id), "index": item.index} for item in slices],
+    }
+
+
+@app.get("/internal/worker/jobs/{job_id}/slices/{slice_id}", tags=["operations"])
+def laptop_worker_download_slice(
+    job_id: UUID,
+    slice_id: UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Send one DICOM object to the authenticated worker without base64 expansion."""
+    require_worker_token(request)
+    lease_token = _worker_lease_token(request)
+    content, digest, index = get_job_slice(session, job_id, slice_id, lease_token)
+    return Response(
+        content=content,
+        media_type="application/dicom",
+        headers={"X-DICOM-SHA256": digest, "X-DICOM-Index": str(index)},
+    )
+
+
+@app.post("/internal/worker/jobs/{job_id}/complete", tags=["operations"])
+def laptop_worker_complete(
+    job_id: UUID,
+    result: WorkerScores,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Validate and persist local model output returned by the laptop worker."""
+    require_worker_token(request)
+    persist_worker_scores(session, job_id, _worker_lease_token(request), result)
+    return {"status": "completed"}
+
+
+@app.post("/internal/worker/jobs/{job_id}/fail", tags=["operations"])
+def laptop_worker_fail(
+    job_id: UUID,
+    payload: dict[str, str],
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Persist a safe error code if a local inference job cannot finish."""
+    require_worker_token(request)
+    allowed = {"model_unavailable", "inference_failed", "worker_internal_error"}
+    error_code = payload.get("error_code", "worker_internal_error")
+    if error_code not in allowed:
+        raise HTTPException(status_code=422, detail="Unsupported worker error code")
+    fail_worker_job(session, job_id, _worker_lease_token(request), error_code)
+    return {"status": "failed"}
+
+
+def _worker_lease_token(request: Request) -> UUID:
+    raw_token = request.headers.get("x-radar-worker-lease", "").strip()
+    try:
+        return UUID(raw_token)
+    except ValueError as error:
+        raise HTTPException(status_code=401, detail="Worker lease authentication failed") from error
+
+
+@app.post("/internal/worker/jobs/{job_id}/heartbeat", tags=["operations"])
+def laptop_worker_heartbeat(
+    job_id: UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
+    """Extend the current worker lease while a long local inference is running."""
+    require_worker_token(request)
+    heartbeat_worker_job(session, job_id, _worker_lease_token(request))
+    return {"status": "active"}
 
 
 @app.get("/v1/auth/me", tags=["security"])
@@ -340,7 +448,7 @@ def list_report_drafts(
             "content": record.content,
             "created_by": record.created_by,
             "created_at": record.created_at,
-            "generation_mode": "meta_model_api" if record.model_version_id else "manual_fallback",
+            "generation_mode": "deepseek_api" if record.model_version_id else "manual_fallback",
             "model_id": (
                 session.get(ModelVersionRecord, record.model_version_id).model_id
                 if record.model_version_id
@@ -414,16 +522,16 @@ def create_report_draft(
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "Meta report generation is unavailable. Use manual_content to save a cited "
-                    "research draft, or configure MODEL_API_KEY on the API server."
+                    "DeepSeek report generation is unavailable. Use manual_content to save a cited "
+                    "research draft, or configure DEEPSEEK_API_KEY on the API server."
                 ),
             ) from error
         except ReportOutputError as error:
             raise HTTPException(
-                status_code=502, detail="Meta returned an invalid report draft"
+                status_code=502, detail="DeepSeek returned an invalid report draft"
             ) from error
         model_version = ModelVersionRecord(
-            provider="meta_model_api",
+            provider="deepseek_api",
             model_id=model_id,
             prompt_version=REPORT_PROMPT_VERSION,
         )
@@ -465,7 +573,7 @@ def create_report_draft(
         "content": record.content,
         "created_by": record.created_by,
         "created_at": record.created_at,
-        "generation_mode": "manual_fallback" if manual else "meta_model_api",
+        "generation_mode": "manual_fallback" if manual else "deepseek_api",
         "model_id": model_id,
     }
 
@@ -595,7 +703,8 @@ def create_inference_job(
     session.add(job)
     session.commit()
     session.refresh(job)
-    background_tasks.add_task(run_inference_job, job.job_id)
+    if not worker_mode_enabled():
+        background_tasks.add_task(run_inference_job, job.job_id)
     return job
 
 
@@ -633,7 +742,7 @@ def get_study_localizations(
     _principal: Principal = Depends(require_authenticated_principal),
     _owner: Principal = Depends(require_owned_study),
 ) -> dict[str, object]:
-    """Return real bounding boxes derived from the configured pretrained ICH mask model."""
+    """Return the latest persisted SAMIHS result produced by the laptop worker."""
     study = session.scalar(
         select(StudyRecord)
         .where(StudyRecord.study_id == study_id)
@@ -644,45 +753,30 @@ def get_study_localizations(
     if not study.slices:
         raise HTTPException(status_code=409, detail="Upload a CT series before localization")
 
-    store = PrivateImageStore()
-    paths = tuple(str(store.path_for(item.image_asset.storage_key)) for item in study.slices)
-    try:
-        result = localize_dicom_series(paths)
-    except LocalizationUnavailableError as error:
+    record = session.scalar(
+        select(StudyLocalizationRecord)
+        .where(StudyLocalizationRecord.study_id == study_id)
+        .options(selectinload(StudyLocalizationRecord.model_version))
+        .order_by(StudyLocalizationRecord.created_at.desc(), StudyLocalizationRecord.localization_id.desc())
+        .limit(1)
+    )
+    if record is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Pretrained lesion localization is unavailable. Configure the local SAMIHS "
-                "model package and checkpoint, then restart the API."
-            ),
-        ) from error
-    except LocalizationInputError as error:
-        raise HTTPException(
-            status_code=422,
-            detail="Stored CT series does not meet the localizer input requirements.",
-        ) from error
-
-    localized_slices = []
-    for image_slice, localization in zip(study.slices, result["slices"], strict=True):
-        localized_slices.append(
-            {
-                "slice_id": image_slice.slice_id,
-                "index": image_slice.index,
-                "image_width": localization["image_width"],
-                "image_height": localization["image_height"],
-                "box": localization["box"],
-                "mask_pixels": localization["mask_pixels"],
-            }
+            detail="SAMIHS results are unavailable until the laptop worker completes localization.",
         )
+    if len(record.slices) != len(study.slices):
+        raise HTTPException(status_code=409, detail="Persisted SAMIHS localization is incomplete")
+    model = record.model_version
     return {
         "schema_version": "1.0.0",
         "study_id": study.study_id,
-        "model_id": result["model_id"],
-        "checkpoint_sha256": result["checkpoint_sha256"],
-        "device": result["device"],
-        "threshold": result["threshold"],
+        "model_id": model.model_id,
+        "checkpoint_sha256": model.artifact_sha256,
+        "device": model.device or "unknown",
+        "threshold": record.threshold,
         "score_semantics": "SAMIHS binary ICH segmentation mask; research localization only",
-        "slices": localized_slices,
+        "slices": record.slices,
     }
 
 
@@ -867,11 +961,15 @@ def get_slice_dicom(
     if record is None:
         raise HTTPException(status_code=404, detail="Study slice not found")
 
-    path = PrivateImageStore().path_for(record.image_asset.storage_key)
-    try:
-        payload = path.read_bytes()
-    except OSError as error:
-        raise HTTPException(status_code=422, detail="Stored DICOM slice cannot be read") from error
+    payload = record.image_asset.dicom_data
+    if payload is None:
+        path = PrivateImageStore().path_for(record.image_asset.storage_key)
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise HTTPException(
+                status_code=422, detail="Stored DICOM slice cannot be read"
+            ) from error
 
     return Response(
         content=payload,
@@ -901,9 +999,13 @@ def get_slice_preview(
     if record is None:
         raise HTTPException(status_code=404, detail="Study slice not found")
 
-    path = PrivateImageStore().path_for(record.image_asset.storage_key)
     try:
-        dataset = dcmread(path, force=False)
+        payload = record.image_asset.dicom_data
+        if payload is None:
+            payload = PrivateImageStore().path_for(
+                record.image_asset.storage_key
+            ).read_bytes()
+        dataset = dcmread(BytesIO(payload), force=False)
         pixels = dataset.pixel_array.astype(np.float32)
         pixels = pixels * float(getattr(dataset, "RescaleSlope", 1)) + float(
             getattr(dataset, "RescaleIntercept", 0)
@@ -953,192 +1055,181 @@ def get_slice_preview(
 async def upload_dicom_series(
     study_id: UUID,
     files: list[UploadFile] = File(...),
+    slice_index: int = Form(..., alias="index"),
+    total_files: int = Form(...),
+    finalize: bool = Form(False),
     session: Session = Depends(get_session),
     _principal: Principal = Depends(require_authenticated_principal),
     _owner: Principal = Depends(require_owned_study),
 ) -> StudyRecord:
-    """Validate and privately store one anonymized, single-frame CT series."""
+    """Validate and persist one anonymized CT slice per request.
+
+    One-slice requests stay below Vercel's function request-body limit. The DICOM
+    bytes are stored in Supabase Postgres so they survive function restarts.
+    """
 
     limits = UploadLimits.from_environment()
-    if not files:
-        raise HTTPException(status_code=422, detail="At least one DICOM image is required")
-    if len(files) > limits.max_files:
+    if len(files) != 1:
+        raise HTTPException(status_code=422, detail="Upload exactly one DICOM slice per request")
+    if total_files < 1 or total_files > limits.max_files:
         raise HTTPException(status_code=413, detail="DICOM series contains too many files")
+    if slice_index < 0 or slice_index >= total_files:
+        raise HTTPException(status_code=422, detail="DICOM slice index is outside the series")
 
     study = session.scalar(
         select(StudyRecord)
         .where(StudyRecord.study_id == study_id)
-        .options(selectinload(StudyRecord.slices))
+        .options(
+            selectinload(StudyRecord.slices).selectinload(StudySliceRecord.image_asset)
+        )
+        .with_for_update()
     )
     if study is None:
         raise HTTPException(status_code=404, detail="Study not found")
-    if study.slices:
-        raise HTTPException(status_code=409, detail="Study already has an uploaded DICOM series")
+    if study.upload_expected_slices not in (None, total_files):
+        raise HTTPException(status_code=409, detail="Upload series size changed during transfer")
+    if study.status == "ready" and study.upload_expected_slices != total_files:
+        raise HTTPException(status_code=409, detail="Study already has a finalized DICOM series")
 
-    store = PrivateImageStore()
-    staged = []
-    published_keys: list[str] = []
+    staging_store = PrivateImageStore(
+        root=Path(tempfile.gettempdir()) / "radar-dicom-staging"
+    )
+    staged_path: Path | None = None
     try:
-        total_size = 0
-        for upload in files:
-            item = await stage_upload(
-                upload,
-                store,
-                limits,
-                already_staged_bytes=total_size,
-            )
-            staged.append(item)
-            total_size += item.size_bytes
-
-        validated = [validate_ct_slice(item.path, max_pixels=limits.max_pixels) for item in staged]
-        for attribute, message in (
-            ("study_instance_uid", "DICOM files do not belong to the same study"),
-            ("series_instance_uid", "DICOM files do not belong to the same CT series"),
-        ):
-            identifiers = {getattr(item, attribute) for item in validated} - {None}
-            if len(identifiers) > 1:
-                raise DicomValidationError(message)
-        if len({(item.rows, item.columns) for item in validated}) != 1:
-            raise DicomValidationError("DICOM series image dimensions do not match")
-        if len({item.sha256 for item in staged}) != len(staged):
-            raise DicomValidationError("DICOM series contains duplicate image files")
-        sop_identifiers = [item.sop_instance_uid for item in validated if item.sop_instance_uid]
-        if len(set(sop_identifiers)) != len(sop_identifiers):
-            raise DicomValidationError("DICOM series contains duplicate image instances")
-
-        has_geometry = [item.slice_position is not None for item in validated]
-        if len(staged) > 1 and any(has_geometry) and not all(has_geometry):
-            raise DicomValidationError(
-                "DICOM series has incomplete slice geometry; include geometry for every slice"
-            )
-        if len(staged) > 1 and not any(has_geometry):
-            instance_numbers = [item.instance_number for item in validated]
-            if any(number is None for number in instance_numbers) or len(
-                set(instance_numbers)
-            ) != len(instance_numbers):
-                raise DicomValidationError(
-                    "Multiple slices need complete position metadata, or a unique "
-                    "DICOM Instance Number on every slice so they can be ordered."
-                )
-        if all(has_geometry):
-            orientations = [item.orientation for item in validated]
-            if any(orientation is None for orientation in orientations):
-                raise DicomValidationError("DICOM series image geometry is incomplete")
-            reference_orientation = orientations[0]
-            if any(
-                any(
-                    not isclose(left, right, abs_tol=1e-4)
-                    for left, right in zip(orientation, reference_orientation, strict=True)
-                )
-                for orientation in orientations[1:]
-            ):
-                raise DicomValidationError("DICOM series image orientations do not match")
-        ordered = sorted(
-            zip(staged, validated, strict=True),
-            key=lambda item: (
-                item[1].slice_position
-                if item[1].slice_position is not None
-                else float(item[1].instance_number or 0),
-                item[1].sop_instance_uid or item[0].sha256,
-            ),
+        staged = await stage_upload(
+            files[0], staging_store, limits, already_staged_bytes=0
         )
-        for index, (upload, metadata) in enumerate(ordered):
+        staged_path = staged.path
+        validated = validate_ct_slice(staged.path, max_pixels=limits.max_pixels)
+        existing = next((item for item in study.slices if item.index == slice_index), None)
+        if existing is not None:
+            if existing.image_asset.sha256 != staged.sha256:
+                raise HTTPException(status_code=409, detail="A different slice already uses this index")
+            if study.status == "ready":
+                return study
+        else:
+            if study.status == "ready":
+                raise HTTPException(status_code=409, detail="Study already has a finalized DICOM series")
+            if study.upload_expected_slices is None:
+                study.upload_expected_slices = total_files
+            already_stored_bytes = sum(item.image_asset.size_bytes for item in study.slices)
+            if already_stored_bytes + staged.size_bytes > limits.max_series_bytes:
+                raise UploadTooLarge("DICOM series exceeds the total size limit")
+            if any(item.image_asset.sha256 == staged.sha256 for item in study.slices):
+                raise DicomValidationError("DICOM series contains duplicate image files")
+            metadata = {
+                "study_instance_uid": validated.study_instance_uid,
+                "series_instance_uid": validated.series_instance_uid,
+                "sop_instance_uid": validated.sop_instance_uid,
+                "slice_position": validated.slice_position,
+                "instance_number": validated.instance_number,
+                "rows": validated.rows,
+                "columns": validated.columns,
+                "orientation": list(validated.orientation) if validated.orientation else None,
+                "is_synthetic_fixture": validated.is_synthetic_fixture,
+            }
+            if study.slices:
+                reference = study.slices[0].dicom_metadata
+                for key, message in (
+                    ("study_instance_uid", "DICOM files do not belong to the same study"),
+                    ("series_instance_uid", "DICOM files do not belong to the same CT series"),
+                    ("rows", "DICOM series image dimensions do not match"),
+                    ("columns", "DICOM series image dimensions do not match"),
+                ):
+                    if reference.get(key) != metadata.get(key):
+                        raise DicomValidationError(message)
+                previous_orientation = reference.get("orientation")
+                next_orientation = metadata.get("orientation")
+                if (previous_orientation is None) != (next_orientation is None) or (
+                    previous_orientation is not None
+                    and next_orientation is not None
+                    and (
+                        len(previous_orientation) != len(next_orientation)
+                        or any(
+                            not isclose(left, right, abs_tol=1e-4)
+                            for left, right in zip(
+                                previous_orientation, next_orientation, strict=True
+                            )
+                        )
+                    )
+                ):
+                    raise DicomValidationError("DICOM series image orientations do not match")
             asset_id = uuid4()
-            storage_key = store.storage_key(study_id, asset_id)
-            store.publish(upload.path, storage_key)
-            published_keys.append(storage_key)
             session.add(
                 ImageAssetRecord(
                     image_asset_id=asset_id,
-                    storage_key=storage_key,
-                    sha256=upload.sha256,
-                    size_bytes=upload.size_bytes,
+                    storage_key=f"supabase-db://{study_id.hex}/{asset_id.hex}",
+                    sha256=staged.sha256,
+                    size_bytes=staged.size_bytes,
+                    dicom_data=staged.path.read_bytes(),
                 )
             )
             study.slices.append(
                 StudySliceRecord(
                     slice_id=uuid4(),
-                    index=index,
+                    index=slice_index,
                     image_asset_id=asset_id,
-                    z_position_mm=metadata.z_position_mm,
+                    z_position_mm=validated.z_position_mm,
+                    dicom_metadata=metadata,
                 )
             )
+        session.flush()
 
-        if validated and all(item.is_synthetic_fixture for item in validated):
-            fixture_model = session.scalar(
-                select(ModelVersionRecord).where(
-                    ModelVersionRecord.provider == "demo_fixture",
-                    ModelVersionRecord.model_id == "synthetic-fixture",
-                    ModelVersionRecord.prompt_version == "demo-fixture-v1",
+        if finalize:
+            if len(study.slices) != total_files or {
+                item.index for item in study.slices
+            } != set(range(total_files)):
+                raise DicomValidationError("Upload is incomplete; some DICOM slices are missing")
+            stored = [item.dicom_metadata for item in study.slices]
+            has_geometry = [item.get("slice_position") is not None for item in stored]
+            if len(stored) > 1 and any(has_geometry) and not all(has_geometry):
+                raise DicomValidationError(
+                    "DICOM series has incomplete slice geometry; include geometry for every slice"
                 )
-            )
-            if fixture_model is None:
-                fixture_model = ModelVersionRecord(
-                    model_version_id=uuid4(),
-                    provider="demo_fixture",
-                    model_id="synthetic-fixture",
-                    prompt_version="demo-fixture-v1",
-                )
-                session.add(fixture_model)
-                session.flush()
-
-            session.add(
-                StudyAnalysisRecord(
-                    analysis_id=uuid4(),
-                    study_id=study_id,
-                    model_version_id=fixture_model.model_version_id,
-                )
-            )
-            evidence_slices = [
-                item
-                for item in study.slices
-                if item.z_position_mm is not None and 0.0 < item.z_position_mm < 10.0
-            ]
-
-            if evidence_slices:
-                finding_id = uuid4()
-                finding = PersistedFindingRecord(
-                    finding_id=finding_id,
-                    study_id=study_id,
-                    category="suspected_intracranial_hemorrhage",
-                    confidence=0.84,
-                    review_status="pending",
-                    model_version_id=fixture_model.model_version_id,
-                )
-                for slice_record in evidence_slices:
-                    finding.evidence.append(
-                        FindingEvidenceRecord(
-                            finding_id=finding_id,
-                            slice_id=slice_record.slice_id,
-                        )
+            if len(stored) > 1 and not any(has_geometry):
+                numbers = [item.get("instance_number") for item in stored]
+                if any(number is None for number in numbers) or len(set(numbers)) != len(numbers):
+                    raise DicomValidationError(
+                        "Multiple slices need complete position metadata or unique Instance Numbers"
                     )
-                session.add(finding)
-
-        study.status = "ready"
+            sop_uids = [item.get("sop_instance_uid") for item in stored if item.get("sop_instance_uid")]
+            if len(set(sop_uids)) != len(sop_uids):
+                raise DicomValidationError("DICOM series contains duplicate image instances")
+            ordered = sorted(
+                study.slices,
+                key=lambda item: (
+                    item.dicom_metadata.get("slice_position")
+                    if item.dicom_metadata.get("slice_position") is not None
+                    else float(item.dicom_metadata.get("instance_number") or 0),
+                    item.dicom_metadata.get("sop_instance_uid") or item.image_asset.sha256,
+                ),
+            )
+            for offset, item in enumerate(study.slices):
+                item.index = total_files + offset + 1
+            session.flush()
+            for ordered_index, item in enumerate(ordered):
+                item.index = ordered_index
+            study.slices.sort(key=lambda item: item.index)
+            study.status = "ready"
+        else:
+            study.status = "uploaded"
         session.commit()
+        session.refresh(study)
         return study
     except UploadTooLarge as error:
         session.rollback()
-        for key in published_keys:
-            store.delete(key)
         raise HTTPException(status_code=413, detail=str(error)) from error
     except DicomValidationError as error:
         session.rollback()
-        for key in published_keys:
-            store.delete(key)
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ValueError as error:
         session.rollback()
-        for key in published_keys:
-            store.delete(key)
         raise HTTPException(status_code=422, detail=str(error)) from error
     except BaseException:
         session.rollback()
-        for key in published_keys:
-            store.delete(key)
         raise
     finally:
-        for item in staged:
-            item.path.unlink(missing_ok=True)
+        if staged_path is not None:
+            staged_path.unlink(missing_ok=True)
         for upload in files:
             await upload.close()

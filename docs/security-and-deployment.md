@@ -11,7 +11,7 @@
   through the API; no edit or delete route is exposed.
 - DICOM uploads are size-limited, validated for CT and identifying metadata, and stored outside
   static web roots. File names and storage keys are never returned.
-- Meta report generation sends only saved de-identified finding facts and evidence IDs. The API key
+- DeepSeek report generation sends only saved de-identified finding facts and evidence IDs. The API key
   must remain server-side. The browser does not accept or bundle an API key.
 - Request logs omit query strings, body content, authorization values, and exception messages.
   Failures include a request ID and an exception class only.
@@ -47,13 +47,13 @@ model-artifacts directory; the image never contains model weights.
 
 3. The Compose API runs with production authentication enabled. Configure `FIREBASE_PROJECT_ID`
    and the matching web Firebase settings to sign in through the browser. API keys are for
-   server-to-server access only. Never place `RADAR_API_KEYS` or `MODEL_API_KEY` in a `NEXT_PUBLIC_*`
+   server-to-server access only. Never place `RADAR_API_KEYS` or `DEEPSEEK_API_KEY` in a `NEXT_PUBLIC_*`
    variable.
 
 4. To enable local model inference, put a compatible checkpoint under
    `apps/api/data/model-artifacts/ct-binary-densenet121.pt` before starting Compose. Without it,
-   inference jobs fail with the safe `model_unavailable` code. To enable Meta report drafts, set
-   `MODEL_API_KEY` only in the API deployment environment; without it, cited manual drafts remain
+   inference jobs fail with the safe `model_unavailable` code. To enable DeepSeek report drafts, set
+   `DEEPSEEK_API_KEY` only in the API deployment environment; without it, cited manual drafts remain
    available.
 
 The Compose API is a local/review deployment, not a publicly reachable production release. Public

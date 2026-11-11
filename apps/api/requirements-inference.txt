@@ -1,0 +1,8 @@
+# Optional dependencies for local checkpoint inference. Not installed by Vercel.
+torch>=2.2,<3.0
+torchvision>=0.17,<1.0
+nibabel>=5.2
+einops>=0.8
+opencv-python>=4.9
+matplotlib>=3.8
+tqdm>=4.66
