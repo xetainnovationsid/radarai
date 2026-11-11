@@ -78,10 +78,13 @@ async function fetchModelScores(studyId: string): Promise<StudyModelScores> {
   return (await responseScores.json()) as StudyModelScores;
 }
 
-async function fetchStudyLocalizations(studyId: string): Promise<StudyLocalizations> {
+async function fetchStudyLocalizations(studyId: string): Promise<StudyLocalizations | null> {
   const safeId = assertValidUuid(studyId, "Study ID");
   const response = await apiFetch(`/v1/studies/${safeId}/localizations`);
   if (!response.ok) {
+    if (response.status === 404 || response.status === 503) {
+      return null;
+    }
     const body = (await response.json().catch(() => ({}))) as { detail?: string };
     throw new Error(body.detail ?? `Lokalisasi lesi tidak tersedia (HTTP ${response.status}).`);
   }

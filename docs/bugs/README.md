@@ -11,7 +11,7 @@
 
 This document presents a comprehensive audit of all discovered bugs, architectural gaps, memory leaks, deprecation warnings, and edge-case vulnerabilities identified across the RADAR AI codebase.
 
-**Current Audit Status:** 100% Resolved. All 24 identified bugs have been systematically addressed, verified with automated test suites (`pytest`, `ruff`, Next.js `typecheck`, and fixture test runner), and hardened with defense-in-depth security guardrails.
+**Current Audit Status:** 100% Resolved. All 26 identified bugs have been systematically addressed, verified with automated test suites (`pytest`, `ruff`, Next.js `typecheck`, and fixture test runner), and hardened with defense-in-depth security guardrails.
 
 ---
 
@@ -43,6 +43,8 @@ This document presents a comprehensive audit of all discovered bugs, architectur
 | **[FIXED-BUG-22](./FIXED-BUG-22-failing-pytest-suite-and-ruff-ci-regressions.md)** | Broken `pytest` suite (`422` contract drift & SQLAlchemy `DetachedInstanceError` on `dicom_data`) & `ruff` CI failures | Backend (`apps/api`) / Tooling / CI | **P1 (High)** | Resolved & Verified |
 | **[FIXED-BUG-23](./FIXED-BUG-23-worker-bridge-missing-storage-fallback-and-unbounded-retries.md)** | Worker bridge missing `PrivateImageStore` fallback (`HTTP 404`), unbounded poison-job retry loop, & `list_report_drafts` N+1 | Backend (`apps/api`) | **P2 (Medium)** | Resolved & Verified |
 | **[FIXED-BUG-24](./FIXED-BUG-24-cornerstone-viewport-pixeldata-dataview-bounds-and-bit-depth.md)** | `CornerstoneViewport` pixel decoding `DataView` out-of-bounds `RangeError` & unmasked `BitsStored` HU corruption | Frontend (`apps/web`) | **P2 (Medium)** | Resolved & Verified |
+| **[FIXED-BUG-25](./FIXED-BUG-25-strict-research-anonymization-blocks-hospital-clinical-dicom.md)** | Strict research de-identification gate blocks authentic hospital clinical DICOM CT scans | Backend (`apps/api`) & Ingestion | **P1 (High)** | Resolved & Verified |
+| **[FIXED-BUG-26](./FIXED-BUG-26-cornerstone-viewport-optional-chaining-and-localization-404.md)** | `CornerstoneViewport` missing optional chaining runtime TypeError & SAMIHS localization HTTP 503 error noise | Frontend (`apps/web`) & Backend (`apps/api`) | **P2 (Medium)** | Resolved & Verified |
 
 ---
 
@@ -56,9 +58,9 @@ This document presents a comprehensive audit of all discovered bugs, architectur
 
 ## 4. Remediation Summary
 
-All 24 bugs have been systematically remediated across the application tiers:
-1. **DICOM Ingestion & Security**: Standardized DICOM PS 3.15 de-identification, odd-length UID null-padding stripping (`\0`), 128-byte preamble active content detection, and atomic cascade-cleanup for aborted uploads.
-2. **Viewer & Rendering Performance**: Fixed Cornerstone3D local image caching collisions, bounded client LRU cache (128 slices), WebGL2 context loss recovery and disposal, 12-bit HU sign extension masking, and micron-level deterministic slice ordering.
-3. **Inference & SAM-IHS Localization**: Persisted local inference SAM-IHS localization alongside pull-worker flows, eliminated frontend polling race conditions, bounded worker lease retries to prevent poison-job head-of-line blocking, and added disk fallback for missing database blobs.
-4. **Auth & Session Hygiene**: Eliminated cookie/sessionStorage mismatch redirect loops, prevented thundering-herd token refresh race conditions, and hardened redirect path validation against open-redirect attacks.
-5. **CI & Tooling**: 40/40 passing unit and integration tests under `pytest`, zero warnings, 100% `ruff` compliance, and verified Next.js typechecks.
+All 26 bugs have been systematically remediated across the application tiers:
+1. **DICOM Ingestion & Hospital Deployment**: Enabled clinical DICOM ingestion with native patient metadata, scanner vendor tags, and overlays by default (`RADAR_ENFORCE_ANONYMIZATION=false`) while retaining strict technical validation and executable polyglot protections.
+2. **Viewer & Rendering Performance**: Fixed Cornerstone3D local image caching collisions, bounded client LRU cache (128 slices), WebGL2 context loss recovery and disposal, 12-bit HU sign extension masking, micron-level deterministic slice ordering, and added optional chaining guards in viewport HUD overlay.
+3. **Inference & SAM-IHS Localization**: Persisted local inference SAM-IHS localization alongside pull-worker flows, normalized localization endpoints to return semantic HTTP 404/null rather than HTTP 503 noise, eliminated frontend polling race conditions, bounded worker lease retries to prevent poison-job head-of-line blocking, and added disk fallback for missing database blobs.
+4. **Auth & Session Hygiene**: Eliminated cookie/sessionStorage mismatch redirect loops, prevented thundering-herd token refresh race conditions, resolved exhaustive-deps warnings, and hardened redirect path validation against open-redirect attacks.
+5. **CI & Tooling**: 42/42 passing unit and integration tests under `pytest`, zero warnings, 100% `ruff` compliance, and verified Next.js typechecks and build.

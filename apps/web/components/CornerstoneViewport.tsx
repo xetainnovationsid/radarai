@@ -9,7 +9,6 @@ import {
   imageLoader,
   metaData,
   utilities,
-  cache,
   type Types,
 } from "@cornerstonejs/core";
 import { apiFetch } from "@/lib/api-client";
@@ -867,7 +866,7 @@ export function CornerstoneViewport({
             DCM: {activeImageId.replace(/^wadouri:/, "")} • ASSET: {currentAssetId.slice(-6)}
           </div>
           <div style={{ color: "#fbbf24", fontWeight: 700 }}>
-            {parsedSlice?.deidentificationMethod.includes("SYNTHETIC")
+            {parsedSlice?.deidentificationMethod?.includes("SYNTHETIC")
               ? "SYNTHETIC ANONYMIZED FIXTURE • NOT FOR CLINICAL USE"
               : "ANONYMIZED RESEARCH CT • NOT FOR CLINICAL USE"}
           </div>

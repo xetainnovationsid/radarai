@@ -797,8 +797,8 @@ def get_study_localizations(
     )
     if record is None:
         raise HTTPException(
-            status_code=503,
-            detail="SAMIHS results are unavailable until the laptop worker completes localization.",
+            status_code=404,
+            detail="SAMIHS results are unavailable until localization completes.",
         )
     if len(record.slices) != len(study.slices):
         raise HTTPException(status_code=409, detail="Persisted SAMIHS localization is incomplete")

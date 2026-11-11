@@ -258,6 +258,7 @@ def test_upload_rejects_corrupt_and_identifiable_files(
     detail: str,
 ) -> None:
     monkeypatch.setenv("RADAR_STORAGE_DIR", str(tmp_path / "private"))
+    monkeypatch.setenv("RADAR_ENFORCE_ANONYMIZATION", "true")
     study_id = create_study()
     if payload is None:
         payload = make_ct_dicom(patient_name="Example^Person")
@@ -271,6 +272,25 @@ def test_upload_rejects_corrupt_and_identifiable_files(
     assert response.status_code == 422
     assert response.json()["detail"] == detail
     assert client.get(f"/v1/studies/{study_id}").json()["slices"] == []
+
+
+def test_upload_accepts_clinical_hospital_dicom_with_patient_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("RADAR_STORAGE_DIR", str(tmp_path / "private"))
+    monkeypatch.setenv("RADAR_ENFORCE_ANONYMIZATION", "false")
+    study_id = create_study()
+    payload = make_ct_dicom(patient_name="Budi^Santoso")
+
+    response = client.post(
+        f"/v1/studies/{study_id}/dicom",
+        files={"files": ("clinical_patient.dcm", payload, "application/dicom")},
+        data={"index": "0", "total_files": "1", "finalize": "true"},
+    )
+
+    assert response.status_code == 201
+    assert len(response.json()["slices"]) == 1
 
 
 def test_upload_rejects_non_ct_series(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -345,6 +345,7 @@ def test_upload_blocks_executable_magic_bytes_and_forbidden_dicom_annotations(
     assert html_mime_resp.status_code == 422
     assert "forbidden file content type" in html_mime_resp.json()["detail"].lower()
 
+    monkeypatch.setenv("RADAR_ENFORCE_ANONYMIZATION", "true")
     burned_resp = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("burned.dcm", make_test_dicom(burned_in="YES"), "application/dicom")},
@@ -360,3 +361,22 @@ def test_upload_blocks_executable_magic_bytes_and_forbidden_dicom_annotations(
     )
     assert overlay_resp.status_code == 422
     assert "overlay planes" in overlay_resp.json()["detail"].lower()
+
+
+def test_hospital_mode_allows_clinical_metadata_and_annotations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("RADAR_STORAGE_DIR", str(tmp_path / "private"))
+    monkeypatch.setenv("RADAR_ENFORCE_ANONYMIZATION", "false")
+    study_id = client.post("/v1/studies", json={}).json()["study_id"]
+
+    form_data = {"index": "0", "total_files": "1", "finalize": "true"}
+
+    payload = make_test_dicom(burned_in="YES", with_overlay=True)
+    response = client.post(
+        f"/v1/studies/{study_id}/dicom",
+        files={"files": ("clinical.dcm", payload, "application/dicom")},
+        data=form_data,
+    )
+    assert response.status_code == 201
+    assert len(response.json()["slices"]) == 1

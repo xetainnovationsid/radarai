@@ -88,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [authRequired]);
 
   const signInWithGoogle = useCallback(async () => {
     const signedIn = await signInWithGooglePopup();

@@ -198,6 +198,10 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
                 "DICOM File Meta has a missing or invalid Transfer Syntax UID"
             )
 
+        enforce_anonymization = (
+            os.getenv("RADAR_ENFORCE_ANONYMIZATION", "false").strip().lower() in ("true", "1")
+        )
+
         is_synthetic_phantom_fixture = (
             str(getattr(dataset, "PatientIdentityRemoved", "")).strip().upper() == "YES"
             and str(getattr(dataset, "DeidentificationMethod", "")).strip()
@@ -205,100 +209,107 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
             and str(getattr(dataset, "PatientName", "")).strip() == "ANONYMIZED^BRAIN^CT"
             and not _has_value(getattr(dataset, "PatientBirthDate", None))
         )
-        is_deidentified_research_series = (
-            str(getattr(dataset, "PatientIdentityRemoved", "")).strip().upper() == "YES"
-            and (
-                "PS 3.15" in str(getattr(dataset, "DeidentificationMethod", ""))
-                or "TCIA" in str(getattr(dataset, "DeidentificationMethod", ""))
-                or "RESEARCH" in str(getattr(dataset, "DeidentificationMethod", "")).upper()
-                or os.getenv("RADAR_DEV_ALLOW_RESEARCH_DICOM", "true").lower() in ("true", "1")
-            )
-            and not _has_value(getattr(dataset, "PatientBirthDate", None))
-        )
-        synthetic_allowed_keywords = {
-            "PatientName",
-            "PatientID",
-            "AccessionNumber",
-            "StudyDescription",
-            "SeriesDescription",
-            "StudyID",
-            "ImageComments",
-        }
-        research_allowed_keywords = {
-            "PatientName",
-            "PatientID",
-            "PatientSex",
-            "PatientAge",
-            "PatientSize",
-            "PatientWeight",
-            "AccessionNumber",
-            "StudyDescription",
-            "SeriesDescription",
-            "StudyID",
-            "ImageComments",
-            "ClinicalTrialTimePointID",
-            "ClinicalTrialTimePointDescription",
-            "ClinicalTrialSiteID",
-            "ClinicalTrialSiteName",
-            "ProtocolName",
-        }
 
-        for element in dataset.iterall():
-            is_pseudonymous_patient_id = element.keyword == "PatientID" and (
-                ANONYMIZED_IDENTIFIER_PATTERN.fullmatch(str(element.value).strip()) is not None
-                or (
+        if enforce_anonymization:
+            is_deidentified_research_series = (
+                str(getattr(dataset, "PatientIdentityRemoved", "")).strip().upper() == "YES"
+                and (
+                    "PS 3.15" in str(getattr(dataset, "DeidentificationMethod", ""))
+                    or "TCIA" in str(getattr(dataset, "DeidentificationMethod", ""))
+                    or "RESEARCH" in str(getattr(dataset, "DeidentificationMethod", "")).upper()
+                    or os.getenv("RADAR_DEV_ALLOW_RESEARCH_DICOM", "true").lower() in ("true", "1")
+                )
+                and not _has_value(getattr(dataset, "PatientBirthDate", None))
+            )
+            synthetic_allowed_keywords = {
+                "PatientName",
+                "PatientID",
+                "AccessionNumber",
+                "StudyDescription",
+                "SeriesDescription",
+                "StudyID",
+                "ImageComments",
+            }
+            research_allowed_keywords = {
+                "PatientName",
+                "PatientID",
+                "PatientSex",
+                "PatientAge",
+                "PatientSize",
+                "PatientWeight",
+                "AccessionNumber",
+                "StudyDescription",
+                "SeriesDescription",
+                "StudyID",
+                "ImageComments",
+                "ClinicalTrialTimePointID",
+                "ClinicalTrialTimePointDescription",
+                "ClinicalTrialSiteID",
+                "ClinicalTrialSiteName",
+                "ProtocolName",
+            }
+
+            for element in dataset.iterall():
+                is_pseudonymous_patient_id = element.keyword == "PatientID" and (
+                    ANONYMIZED_IDENTIFIER_PATTERN.fullmatch(str(element.value).strip()) is not None
+                    or (
+                        is_deidentified_research_series
+                        and (
+                            RESEARCH_PSEUDONYM_PATTERN.fullmatch(str(element.value).strip())
+                            is not None
+                        )
+                    )
+                )
+                is_allowed_synthetic_tag = (
+                    is_synthetic_phantom_fixture and element.keyword in synthetic_allowed_keywords
+                )
+                is_allowed_research_tag = (
+                    is_deidentified_research_series and element.keyword in research_allowed_keywords
+                )
+                if element.tag.is_private and _has_value(element.value):
+                    if not is_deidentified_research_series:
+                        raise DicomValidationError(
+                            "DICOM private metadata must be removed before upload"
+                        )
+                if 0x6000 <= element.tag.group <= 0x601E and _has_value(element.value):
+                    raise DicomValidationError("DICOM overlay planes must be removed before upload")
+
+                is_valid_pseudonymous_name = (
                     is_deidentified_research_series
+                    and element.VR == "PN"
                     and RESEARCH_PSEUDONYM_PATTERN.fullmatch(str(element.value).strip()) is not None
                 )
-            )
-            is_allowed_synthetic_tag = (
-                is_synthetic_phantom_fixture and element.keyword in synthetic_allowed_keywords
-            )
-            is_allowed_research_tag = (
-                is_deidentified_research_series and element.keyword in research_allowed_keywords
-            )
-            if element.tag.is_private and _has_value(element.value):
-                if not is_deidentified_research_series:
-                    raise DicomValidationError(
-                        "DICOM private metadata must be removed before upload"
-                    )
-            if 0x6000 <= element.tag.group <= 0x601E and _has_value(element.value):
-                raise DicomValidationError("DICOM overlay planes must be removed before upload")
 
-            is_valid_pseudonymous_name = (
-                is_deidentified_research_series
-                and element.VR == "PN"
-                and RESEARCH_PSEUDONYM_PATTERN.fullmatch(str(element.value).strip()) is not None
-            )
+                if (
+                    (
+                        element.keyword in IDENTIFYING_KEYWORDS
+                        and not is_pseudonymous_patient_id
+                        and not is_allowed_synthetic_tag
+                        and not is_allowed_research_tag
+                    )
+                    or (
+                        element.VR == "PN"
+                        and not is_allowed_synthetic_tag
+                        and not is_valid_pseudonymous_name
+                    )
+                ) and _has_value(element.value):
+                    raise DicomValidationError(
+                        "DICOM contains identifying metadata; upload an anonymized series"
+                    )
 
             if (
-                (
-                    element.keyword in IDENTIFYING_KEYWORDS
-                    and not is_pseudonymous_patient_id
-                    and not is_allowed_synthetic_tag
-                    and not is_allowed_research_tag
-                )
-                or (
-                    element.VR == "PN"
-                    and not is_allowed_synthetic_tag
-                    and not is_valid_pseudonymous_name
-                )
-            ) and _has_value(element.value):
+                "BurnedInAnnotation" in dataset
+                and str(dataset.BurnedInAnnotation).strip().upper() == "YES"
+            ):
                 raise DicomValidationError(
-                    "DICOM contains identifying metadata; upload an anonymized series"
+                    "DICOM image has burned-in annotations that may contain PHI"
                 )
 
-        if (
-            "BurnedInAnnotation" in dataset
-            and str(dataset.BurnedInAnnotation).strip().upper() == "YES"
-        ):
-            raise DicomValidationError("DICOM image has burned-in annotations that may contain PHI")
-
-        if (
-            "PatientIdentityRemoved" in dataset
-            and str(dataset.PatientIdentityRemoved).upper() != "YES"
-        ):
-            raise DicomValidationError("DICOM de-identification metadata is not valid")
+            if (
+                "PatientIdentityRemoved" in dataset
+                and str(dataset.PatientIdentityRemoved).upper() != "YES"
+            ):
+                raise DicomValidationError("DICOM de-identification metadata is not valid")
 
         study_uid = _clean_uid(getattr(dataset, "StudyInstanceUID", ""))
         series_uid = _clean_uid(getattr(dataset, "SeriesInstanceUID", ""))
