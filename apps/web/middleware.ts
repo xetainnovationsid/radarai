@@ -27,6 +27,14 @@ function checkEdgeRateLimit(
   const now = Date.now();
   const cutoff = now - WINDOW_MS;
 
+  if (ipBuckets.size > 256 && Math.random() < 0.05) {
+    for (const [k, ts] of ipBuckets.entries()) {
+      if (ts.length === 0 || ts[ts.length - 1] <= cutoff) {
+        ipBuckets.delete(k);
+      }
+    }
+  }
+
   if (!ipBuckets.has(key) && ipBuckets.size >= MAX_TRACKED_IPS) {
     const firstKey = ipBuckets.keys().next().value;
     if (firstKey) ipBuckets.delete(firstKey);
@@ -99,6 +107,20 @@ function applySecurityHeaders(
   return response;
 }
 
+function sanitizeRedirectPath(raw: string | null): string {
+  if (!raw) return "/";
+  const trimmed = raw.trim();
+  if (
+    !trimmed.startsWith("/") ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("/\\") ||
+    trimmed.includes("://")
+  ) {
+    return "/";
+  }
+  return trimmed;
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -143,9 +165,9 @@ export function middleware(request: NextRequest) {
     (process.env.NEXT_PUBLIC_REQUIRE_AUTH ?? "").trim().toLowerCase() === "1" ||
     (process.env.NEXT_PUBLIC_REQUIRE_AUTH ?? "").trim().toLowerCase() === "yes";
 
-  // If already authenticated and visiting /login, redirect to /
+  // If already authenticated and visiting /login, redirect to sanitized destination
   if (isLoginPage && hasSessionCookie) {
-    const destination = request.nextUrl.searchParams.get("redirect") || "/";
+    const destination = sanitizeRedirectPath(request.nextUrl.searchParams.get("redirect"));
     return applySecurityHeaders(
       NextResponse.redirect(new URL(destination, request.url)),
       pathname

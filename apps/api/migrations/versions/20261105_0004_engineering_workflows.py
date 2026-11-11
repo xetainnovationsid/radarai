@@ -41,12 +41,8 @@ def upgrade() -> None:
         "finding_review_events",
         sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
     )
-    op.add_column(
-        "finding_review_events", sa.Column("previous_snapshot", sa.JSON(), nullable=True)
-    )
-    op.add_column(
-        "finding_review_events", sa.Column("current_snapshot", sa.JSON(), nullable=True)
-    )
+    op.add_column("finding_review_events", sa.Column("previous_snapshot", sa.JSON(), nullable=True))
+    op.add_column("finding_review_events", sa.Column("current_snapshot", sa.JSON(), nullable=True))
     op.create_table(
         "inference_jobs",
         sa.Column("job_id", uuid_type(), primary_key=True, nullable=False),

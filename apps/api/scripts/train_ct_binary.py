@@ -141,9 +141,7 @@ def grouped_validation_patients(
         raise ValueError("Validation fraction must be between 0.05 and 0.4")
     patient_label: dict[str, int] = defaultdict(int)
     for record in records:
-        patient_label[record.patient_id] = max(
-            patient_label[record.patient_id], record.bag_label
-        )
+        patient_label[record.patient_id] = max(patient_label[record.patient_id], record.bag_label)
     rng = random.Random(seed)
     validation: set[str] = set()
     for label in (0, 1):
@@ -404,7 +402,10 @@ def main() -> int:
         "--horizontal-flip-probability",
         type=float,
         default=0.0,
-        help="Apply a label-preserving horizontal flip to each training slice with this probability",
+        help=(
+            "Apply a label-preserving horizontal flip to each training slice "
+            "with this probability"
+        ),
     )
     parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--seed", type=int, default=20261026)
@@ -490,9 +491,7 @@ def main() -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.metrics_output.parent.mkdir(parents=True, exist_ok=True)
         best_epoch = (
-            int(best_epoch)
-            if args.resume_checkpoint and args.metrics_output.is_file()
-            else 0
+            int(best_epoch) if args.resume_checkpoint and args.metrics_output.is_file() else 0
         )
         for epoch in range(args.epochs):
             train_loss, train_decoded, train_decode_errors = _train_epoch(
@@ -655,4 +654,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

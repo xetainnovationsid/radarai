@@ -91,9 +91,7 @@ def is_auth_required() -> bool:
 
 def allowed_web_origins() -> list[str]:
     """Return validated CORS origins; reject wildcard '*' in production."""
-    raw = os.getenv(
-        "RADAR_WEB_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-    )
+    raw = os.getenv("RADAR_WEB_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
     origins = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
     if is_production_env() and "*" in origins:
         raise RuntimeError("Wildcard '*' in RADAR_WEB_ORIGINS is forbidden in production")
@@ -209,9 +207,7 @@ def _verify_dev_token(token: str) -> Principal | None:
         payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
         sig = parts[2].rstrip("=")
         expected_sig = (
-            base64.urlsafe_b64encode(b"radar-local-dev-signature")
-            .decode("ascii")
-            .rstrip("=")
+            base64.urlsafe_b64encode(b"radar-local-dev-signature").decode("ascii").rstrip("=")
         )
         if (
             header.get("alg") == "HS256"
@@ -487,8 +483,7 @@ def require_authenticated_principal(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
-                "Authentication required. Sign in with Firebase OAuth "
-                "or provide a valid API token."
+                "Authentication required. Sign in with Firebase OAuth or provide a valid API token."
             ),
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -523,19 +518,23 @@ class SlidingWindowRateLimiter:
         self._max_keys = max_keys
         self._buckets: dict[str, deque[float]] = {}
         self._lock = Lock()
+        self._ops_since_sweep = 0
 
     def clear(self) -> None:
         with self._lock:
             self._buckets.clear()
+            self._ops_since_sweep = 0
 
-    def check(
-        self, key: str, *, limit: int, window_seconds: float = 60.0
-    ) -> tuple[bool, int, int]:
+    def check(self, key: str, *, limit: int, window_seconds: float = 60.0) -> tuple[bool, int, int]:
         """Return (allowed, remaining, retry_after_seconds)."""
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
-            if key not in self._buckets and len(self._buckets) >= self._max_keys:
+            self._ops_since_sweep += 1
+            if (
+                self._ops_since_sweep >= 256 and len(self._buckets) > 64
+            ) or (key not in self._buckets and len(self._buckets) >= self._max_keys):
+                self._ops_since_sweep = 0
                 stale_keys = [
                     k
                     for k, timestamps in self._buckets.items()
@@ -581,12 +580,14 @@ def _rate_limit_for_request(path: str, method: str) -> tuple[str, int] | None:
             return default
 
     if method == "POST" and (path == "/v1/studies" or path.endswith("/dicom")):
-        return "upload", _env_int("RADAR_UPLOAD_RATE_LIMIT_PER_MINUTE", 20)
+        return "upload", _env_int("RADAR_UPLOAD_RATE_LIMIT_PER_MINUTE", 600)
     if method == "POST" and path.endswith("/inference-jobs"):
-        return "inference", _env_int("RADAR_INFERENCE_RATE_LIMIT_PER_MINUTE", 30)
+        return "inference", _env_int("RADAR_INFERENCE_RATE_LIMIT_PER_MINUTE", 60)
     if method == "GET" and (path.endswith("/scores") or path.endswith("/localizations")):
-        return "inference", _env_int("RADAR_INFERENCE_RATE_LIMIT_PER_MINUTE", 30)
-    return "general", _env_int("RADAR_RATE_LIMIT_PER_MINUTE", 120)
+        return "inference", _env_int("RADAR_INFERENCE_RATE_LIMIT_PER_MINUTE", 60)
+    if method == "GET" and "/slices/" in path:
+        return "slices", _env_int("RADAR_SLICE_RATE_LIMIT_PER_MINUTE", 2400)
+    return "general", _env_int("RADAR_RATE_LIMIT_PER_MINUTE", 1200)
 
 
 class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
@@ -597,20 +598,11 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable[[Request], Any]) -> Any:
         incoming_req_id = request.headers.get("x-request-id", "").strip()
-        request_id = (
-            incoming_req_id
-            if _SAFE_REQUEST_ID_RE.match(incoming_req_id)
-            else str(uuid4())
-        )
+        request_id = incoming_req_id if _SAFE_REQUEST_ID_RE.match(incoming_req_id) else str(uuid4())
 
         raw_path = request.url.path
         lower_path = raw_path.lower()
-        if (
-            ".." in raw_path
-            or "%2e%2e" in lower_path
-            or "\x00" in raw_path
-            or "%00" in lower_path
-        ):
+        if ".." in raw_path or "%2e%2e" in lower_path or "\x00" in raw_path or "%00" in lower_path:
             response = JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": "Invalid request path"},
@@ -674,9 +666,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         return self._apply_security_headers(request, response, request_id)
 
     @staticmethod
-    def _apply_security_headers(
-        request: Request, response: Any, request_id: str
-    ) -> Any:
+    def _apply_security_headers(request: Request, response: Any, request_id: str) -> Any:
         headers = response.headers
         headers["X-Request-ID"] = request_id
         headers.setdefault("X-Content-Type-Options", "nosniff")

@@ -25,6 +25,9 @@ from radar_api.models import (
     StudyRecord,
     StudySliceRecord,
 )
+from radar_api.storage import PrivateImageStore
+
+MAX_WORKER_ATTEMPTS = 5
 
 
 class WorkerLocalizationSlice(BaseModel):
@@ -64,9 +67,13 @@ def require_worker_token(request: Request) -> None:
     expected = os.getenv("RADAR_WORKER_TOKEN", "").strip()
     supplied = request.headers.get("authorization", "")
     if len(expected) < 32 or not hmac.compare_digest(supplied, f"Bearer {expected}"):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Worker authentication failed")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Worker authentication failed"
+        )
     if not worker_mode_enabled():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Laptop worker mode is disabled")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Laptop worker mode is disabled"
+        )
 
 
 def claim_next_job(
@@ -105,6 +112,15 @@ def claim_next_job(
         job.lease_expires_at = None
         session.commit()
         return None
+    if (job.attempt_count or 0) >= MAX_WORKER_ATTEMPTS:
+        job.status = "failed"
+        job.error_code = "worker_lease_exhausted"
+        job.finished_at = now
+        job.lease_token = None
+        job.lease_expires_at = None
+        study.status = "failed"
+        session.commit()
+        return None
     lease_token = uuid4()
     job.status = "processing"
     job.started_at = job.started_at or now
@@ -121,13 +137,9 @@ def claim_next_job(
     }
 
 
-def _require_active_lease(
-    session: Session, job_id: UUID, lease_token: UUID
-) -> InferenceJobRecord:
+def _require_active_lease(session: Session, job_id: UUID, lease_token: UUID) -> InferenceJobRecord:
     job = session.scalar(
-        select(InferenceJobRecord)
-        .where(InferenceJobRecord.job_id == job_id)
-        .with_for_update()
+        select(InferenceJobRecord).where(InferenceJobRecord.job_id == job_id).with_for_update()
     )
     now = datetime.now(UTC)
     lease_expires_at = job.lease_expires_at if job is not None else None
@@ -160,9 +172,17 @@ def get_job_slice(
         .where(StudySliceRecord.study_id == job.study_id, StudySliceRecord.slice_id == slice_id)
         .options(selectinload(StudySliceRecord.image_asset).undefer(ImageAssetRecord.dicom_data))
     )
-    if item is None or item.image_asset.dicom_data is None:
+    if item is None:
         raise HTTPException(status_code=404, detail="DICOM slice not found")
-    return item.image_asset.dicom_data, item.image_asset.sha256, item.index
+    payload = item.image_asset.dicom_data
+    if payload is None:
+        try:
+            payload = PrivateImageStore().path_for(item.image_asset.storage_key).read_bytes()
+        except OSError as error:
+            raise HTTPException(status_code=404, detail="DICOM slice not found") from error
+    if not payload:
+        raise HTTPException(status_code=404, detail="DICOM slice not found")
+    return payload, item.image_asset.sha256, item.index
 
 
 def persist_worker_scores(
@@ -208,7 +228,9 @@ def persist_worker_scores(
         for output in localization.slices:
             image_slice = localization_by_id.get(str(output.slice_id))
             if image_slice is None or output.index != image_slice.index:
-                raise HTTPException(status_code=422, detail="SAMIHS returned invalid slice evidence")
+                raise HTTPException(
+                    status_code=422, detail="SAMIHS returned invalid slice evidence"
+                )
         if len({row.slice_id for row in localization.slices}) != len(study.slices):
             raise HTTPException(status_code=422, detail="SAMIHS returned duplicate slice evidence")
         localization_slices = localization.slices
@@ -251,7 +273,10 @@ def persist_worker_scores(
                 slices=[row.model_dump(mode="json") for row in localization_slices],
             )
         )
-    threshold = float(os.getenv("RADAR_ICH_SCORE_THRESHOLD", "0.5"))
+    try:
+        threshold = float(os.getenv("RADAR_ICH_SCORE_THRESHOLD", "0.5"))
+    except (TypeError, ValueError):
+        threshold = 0.5
     if not 0 < threshold < 1:
         threshold = 0.5
     positive: list[tuple[StudySliceRecord, float]] = []
@@ -301,9 +326,7 @@ def persist_worker_scores(
     session.commit()
 
 
-def fail_worker_job(
-    session: Session, job_id: UUID, lease_token: UUID, error_code: str
-) -> None:
+def fail_worker_job(session: Session, job_id: UUID, lease_token: UUID, error_code: str) -> None:
     job = _require_active_lease(session, job_id, lease_token)
     study = session.get(StudyRecord, job.study_id)
     if study is not None:

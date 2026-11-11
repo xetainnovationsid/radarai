@@ -13,7 +13,9 @@ MODEL_ID = os.getenv("RADAR_MODEL_ID", "deepseek-flash")
 def request_json(path: str, *, body: dict | None = None) -> dict:
     api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not set; add it in the DeepSeek Platform dashboard.")
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY is not set; add it in the DeepSeek Platform dashboard."
+        )
 
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     data = None
@@ -56,7 +58,10 @@ def main() -> int:
                     "model_id": completion.get("model", MODEL_ID),
                     "finish_reason": (completion.get("choices") or [{}])[0].get("finish_reason"),
                     "usage": completion.get("usage", {}),
-                    "note": "Synthetic text-only connectivity check; no study or patient data was sent.",
+                    "note": (
+                        "Synthetic text-only connectivity check; "
+                        "no study or patient data was sent."
+                    ),
                 },
                 indent=2,
             )

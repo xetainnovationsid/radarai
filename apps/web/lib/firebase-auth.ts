@@ -48,11 +48,14 @@ export function isWebAuthRequired(): boolean {
 export function loadStoredSession(): AuthUser | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    const raw =
+      window.sessionStorage.getItem(SESSION_STORAGE_KEY) ||
+      window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AuthUser;
     if (!parsed?.uid || !parsed?.idToken || typeof parsed.expiresAt !== "number") {
       window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
     return parsed;
@@ -66,9 +69,12 @@ export function saveStoredSession(user: AuthUser | null): void {
   try {
     if (!user) {
       window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
       return;
     }
-    window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user));
+    const serialized = JSON.stringify(user);
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, serialized);
+    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
   } catch {
     // Ignore storage quota errors in private browsing mode.
   }
@@ -140,13 +146,20 @@ export async function refreshFirebaseSession(user: AuthUser): Promise<AuthUser |
   }
 }
 
+let activeRefreshPromise: Promise<AuthUser | null> | null = null;
+
 export async function getValidIdToken(): Promise<string | null> {
   const session = loadStoredSession();
   if (!session) return null;
   if (Date.now() < session.expiresAt) {
     return session.idToken;
   }
-  const refreshed = await refreshFirebaseSession(session);
+  if (!activeRefreshPromise) {
+    activeRefreshPromise = refreshFirebaseSession(session).finally(() => {
+      activeRefreshPromise = null;
+    });
+  }
+  const refreshed = await activeRefreshPromise;
   return refreshed?.idToken ?? null;
 }
 

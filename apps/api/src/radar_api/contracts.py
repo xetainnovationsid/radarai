@@ -182,4 +182,3 @@ class FindingReviewEvent(ContractModel):
     current_snapshot: dict[str, object] | None = None
     reviewer: str
     created_at: datetime
-

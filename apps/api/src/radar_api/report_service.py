@@ -67,7 +67,9 @@ def generate_report_content(findings: list[dict[str, Any]]) -> tuple[ReportConte
         try:
             parsed = ReportContent.model_validate_json(content)
         except ValueError as error:
-            raise ReportOutputError("DeepSeek returned content outside the report contract") from error
+            raise ReportOutputError(
+                "DeepSeek returned content outside the report contract"
+            ) from error
         returned_model_id = str(result.get("model") or model_id)[:160]
         return parsed, returned_model_id
     except ReportOutputError:

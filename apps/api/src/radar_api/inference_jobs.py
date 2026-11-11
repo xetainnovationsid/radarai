@@ -18,6 +18,11 @@ from radar_api.inference_service import (
     StudyScoringError,
     score_local_checkpoint,
 )
+from radar_api.localization_service import (
+    LocalizationInputError,
+    LocalizationUnavailableError,
+    localize_dicom_series,
+)
 from radar_api.models import (
     FindingEvidenceRecord,
     ImageAssetRecord,
@@ -26,6 +31,7 @@ from radar_api.models import (
     ModelVersionRecord,
     PersistedFindingRecord,
     StudyAnalysisRecord,
+    StudyLocalizationRecord,
     StudyRecord,
     StudySliceRecord,
 )
@@ -88,12 +94,44 @@ def run_inference_job(job_id: UUID) -> None:
         job.status = "processing"
         job.started_at = datetime.now(UTC)
         session.commit()
+        localization_payload = None
         try:
             with tempfile.TemporaryDirectory(prefix="radar-inference-") as temporary_directory:
-                paths = _materialize_dicom_slices(
-                    session, study, Path(temporary_directory)
-                )
+                paths = _materialize_dicom_slices(session, study, Path(temporary_directory))
                 result = score_local_checkpoint(paths)
+                try:
+                    localization_result = localize_dicom_series(tuple(str(path) for path in paths))
+                    localization_rows = []
+                    for image_slice, output in zip(
+                        study.slices, localization_result["slices"], strict=True
+                    ):
+                        localization_rows.append(
+                            {
+                                "slice_id": str(image_slice.slice_id),
+                                "index": int(output["index"]),
+                                "image_width": int(output["image_width"]),
+                                "image_height": int(output["image_height"]),
+                                "box": output["box"],
+                                "mask_pixels": int(output["mask_pixels"]),
+                            }
+                        )
+                    localization_payload = {
+                        "model_id": localization_result["model_id"],
+                        "checkpoint_sha256": localization_result["checkpoint_sha256"],
+                        "device": localization_result["device"],
+                        "threshold": localization_result["threshold"],
+                        "slices": localization_rows,
+                    }
+                except (LocalizationInputError, LocalizationUnavailableError) as error:
+                    logger.info(
+                        "SAMIHS localization unavailable for job %s (%s)",
+                        job_id,
+                        type(error).__name__,
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "SAMIHS localization failed for job %s (%s)", job_id, type(error).__name__
+                    )
         except ModelUnavailableError:
             _finish_failed(session, job, study, "model_unavailable")
             return
@@ -130,6 +168,27 @@ def run_inference_job(job_id: UUID) -> None:
             )
             session.add(analysis)
             session.flush()
+            if localization_payload is not None:
+                localization_model = ModelVersionRecord(
+                    model_version_id=uuid4(),
+                    provider="local_checkpoint",
+                    model_id=str(localization_payload["model_id"])[:160],
+                    prompt_version="samihs-fixed-center-prompt/v1",
+                    preprocessing_version="samihs-ct-hu-preprocessing/v1",
+                    artifact_sha256=str(localization_payload["checkpoint_sha256"]),
+                    device=str(localization_payload["device"])[:16],
+                )
+                session.add(localization_model)
+                session.flush()
+                session.add(
+                    StudyLocalizationRecord(
+                        localization_id=uuid4(),
+                        study_id=study.study_id,
+                        model_version_id=localization_model.model_version_id,
+                        threshold=float(localization_payload["threshold"]),
+                        slices=localization_payload["slices"],
+                    )
+                )
             positive_slices: list[tuple[StudySliceRecord, float]] = []
             for image_slice, output in zip(study.slices, score_rows, strict=True):
                 scores = output.get("scores")

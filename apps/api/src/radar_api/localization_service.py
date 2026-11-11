@@ -162,9 +162,7 @@ def _read_hu_volume(paths: tuple[str, ...]) -> tuple[np.ndarray, int, int]:
             intercept = float(getattr(dataset, "RescaleIntercept", 0.0))
             if not math.isfinite(slope) or not math.isfinite(intercept):
                 raise LocalizationInputError("CT rescale metadata is invalid")
-            hu = pixels.astype(np.float32, copy=False) * np.float32(slope) + np.float32(
-                intercept
-            )
+            hu = pixels.astype(np.float32, copy=False) * np.float32(slope) + np.float32(intercept)
             if not np.isfinite(hu).all():
                 raise LocalizationInputError("CT pixels contain non-finite values")
             estimated_bytes += int(hu.size) * np.dtype(np.float32).itemsize

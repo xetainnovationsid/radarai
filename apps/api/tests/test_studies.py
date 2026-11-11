@@ -1,10 +1,10 @@
+import hashlib
 import time
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID
-import hashlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +16,7 @@ from pydicom.uid import (
     generate_uid,
 )
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, undefer
 from sqlalchemy.pool import StaticPool
 
 from radar_api import inference_jobs
@@ -184,7 +184,9 @@ def seed_test_finding(study_id: str) -> str:
         )
         session.add(model)
         session.flush()
-        analysis = StudyAnalysisRecord(study_id=study.study_id, model_version_id=model.model_version_id)
+        analysis = StudyAnalysisRecord(
+            study_id=study.study_id, model_version_id=model.model_version_id
+        )
         session.add(analysis)
         finding = PersistedFindingRecord(
             study_id=study.study_id,
@@ -193,9 +195,7 @@ def seed_test_finding(study_id: str) -> str:
             review_status="pending",
             model_version_id=model.model_version_id,
         )
-        finding.evidence.append(
-            FindingEvidenceRecord(slice_id=study.slices[2].slice_id)
-        )
+        finding.evidence.append(FindingEvidenceRecord(slice_id=study.slices[2].slice_id))
         session.add(finding)
         session.commit()
         return str(finding.finding_id)
@@ -229,7 +229,11 @@ def test_upload_accepts_anonymized_ct_series_and_stores_privately(
     assert "first.dcm" not in response.text
 
     with TestSession() as session:
-        assets = list(session.scalars(select(ImageAssetRecord)).all())
+        assets = list(
+            session.scalars(
+                select(ImageAssetRecord).options(undefer(ImageAssetRecord.dicom_data))
+            ).all()
+        )
     assert len(assets) == 2
     assert {asset.dicom_data for asset in assets} == {first, second}
     assert all(asset.storage_key.startswith("supabase-db://") for asset in assets)
@@ -553,16 +557,19 @@ def test_laptop_worker_uses_fenced_lease_and_persists_real_endpoint_shape(
     scores = client.get(f"/v1/studies/{study_id}/scores")
     assert scores.status_code == 200
     assert scores.json()["slices"][0]["class_1_score"] == 0.7
-    assert client.post(
-        f"/internal/worker/jobs/{job_id}/complete",
-        headers=active_headers,
-        json={
-            "model_id": "test-densenet-v1",
-            "checkpoint_sha256": "a" * 64,
-            "device": "cuda:0",
-            "slices": [{"slice_id": slice_id, "scores": {"0": 0.3, "1": 0.7}}],
-        },
-    ).status_code == 409
+    assert (
+        client.post(
+            f"/internal/worker/jobs/{job_id}/complete",
+            headers=active_headers,
+            json={
+                "model_id": "test-densenet-v1",
+                "checkpoint_sha256": "a" * 64,
+                "device": "cuda:0",
+                "slices": [{"slice_id": slice_id, "scores": {"0": 0.3, "1": 0.7}}],
+            },
+        ).status_code
+        == 409
+    )
 
 
 def test_manual_report_draft_is_versioned_and_rejects_unknown_citations(

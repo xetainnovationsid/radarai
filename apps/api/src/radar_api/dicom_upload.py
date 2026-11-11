@@ -83,6 +83,22 @@ def _write_chunk(destination: BinaryIO, chunk: bytes, digest: "hashlib._Hash") -
     digest.update(chunk)
 
 
+def _has_forbidden_active_content(chunk: bytes) -> bool:
+    """Detect active scripting or executable polyglots while honoring Part 10 preambles."""
+    head_lower = chunk[:128].lower()
+    if any(
+        tag in head_lower
+        for tag in (b"<script", b"<?php", b"<html", b"<!doctype html", b"<svg")
+    ):
+        return True
+
+    # Genuine DICOM Part 10 files have DICM at offset 128..131; preamble may hold arbitrary bytes
+    if len(chunk) >= 132 and chunk[128:132] == b"DICM":
+        return False
+
+    return any(chunk.startswith(prefix) for prefix in FORBIDDEN_MAGIC_PREFIXES)
+
+
 async def stage_upload(
     upload: UploadFile,
     store: PrivateImageStore,
@@ -105,11 +121,7 @@ async def stage_upload(
             while chunk := await upload.read(CHUNK_SIZE):
                 if not checked_header:
                     checked_header = True
-                    head_lower = chunk[:32].lstrip().lower()
-                    if any(chunk.startswith(prefix) for prefix in FORBIDDEN_MAGIC_PREFIXES) or any(
-                        head_lower.startswith(prefix)
-                        for prefix in (b"<!doctype html", b"<html", b"<script", b"<?php")
-                    ):
+                    if _has_forbidden_active_content(chunk):
                         raise ValueError("Upload contains forbidden executable or active content")
                 size_bytes += len(chunk)
                 if size_bytes > limits.max_file_bytes:

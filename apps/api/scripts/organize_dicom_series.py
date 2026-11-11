@@ -62,9 +62,7 @@ def _read_slice(path: Path, source: Path, *, repair_file_meta: bool = False) -> 
         if modality != "CT":
             raise SortError("file is not tagged as CT")
         dataset_sop_class = str(getattr(dataset, "SOPClassUID", "")).strip()
-        media_sop_class = str(
-            getattr(dataset.file_meta, "MediaStorageSOPClassUID", "")
-        ).strip()
+        media_sop_class = str(getattr(dataset.file_meta, "MediaStorageSOPClassUID", "")).strip()
         if not media_sop_class and not repair_file_meta:
             raise SortError("missing file-meta Media Storage SOP Class UID")
         if dataset_sop_class and media_sop_class and dataset_sop_class != media_sop_class:
@@ -80,9 +78,7 @@ def _read_slice(path: Path, source: Path, *, repair_file_meta: bool = False) -> 
         sop_id = str(getattr(dataset, "SOPInstanceUID", "")).strip()
         if not all(_is_identifier(value) for value in (study_id, series_id, sop_id)):
             raise SortError("Study/Series/SOP identifier is missing or unsupported")
-        media_sop_id = str(
-            getattr(dataset.file_meta, "MediaStorageSOPInstanceUID", "")
-        ).strip()
+        media_sop_id = str(getattr(dataset.file_meta, "MediaStorageSOPInstanceUID", "")).strip()
         if media_sop_id and media_sop_id != sop_id and not repair_file_meta:
             raise SortError("dataset and file-meta SOP Instance UIDs do not match")
         transfer_syntax = str(getattr(dataset.file_meta, "TransferSyntaxUID", "")).strip()
@@ -102,9 +98,7 @@ def _read_slice(path: Path, source: Path, *, repair_file_meta: bool = False) -> 
         orientation_value: tuple[float, ...] | None = None
         if has_position:
             position = tuple(float(value) for value in dataset.ImagePositionPatient)
-            orientation_value = tuple(
-                float(value) for value in dataset.ImageOrientationPatient
-            )
+            orientation_value = tuple(float(value) for value in dataset.ImageOrientationPatient)
             if len(position) != 3 or len(orientation_value) != 6:
                 raise SortError("invalid slice geometry")
             if not all(math.isfinite(value) for value in (*position, *orientation_value)):
@@ -113,9 +107,11 @@ def _read_slice(path: Path, source: Path, *, repair_file_meta: bool = False) -> 
             row_norm = math.sqrt(sum(value * value for value in row))
             column_norm = math.sqrt(sum(value * value for value in column))
             dot = sum(left * right for left, right in zip(row, column, strict=True))
-            if not math.isclose(row_norm, 1.0, abs_tol=1e-3) or not math.isclose(
-                column_norm, 1.0, abs_tol=1e-3
-            ) or not math.isclose(dot, 0.0, abs_tol=1e-3):
+            if (
+                not math.isclose(row_norm, 1.0, abs_tol=1e-3)
+                or not math.isclose(column_norm, 1.0, abs_tol=1e-3)
+                or not math.isclose(dot, 0.0, abs_tol=1e-3)
+            ):
                 raise SortError("invalid image orientation")
             normal = (
                 row[1] * column[2] - row[2] * column[1],
@@ -253,9 +249,7 @@ def main() -> int:
         for path, (item, error) in zip(
             paths,
             executor.map(
-                lambda current: _read_path(
-                    current, source, repair_file_meta=args.repair_file_meta
-                ),
+                lambda current: _read_path(current, source, repair_file_meta=args.repair_file_meta),
                 paths,
             ),
             strict=True,

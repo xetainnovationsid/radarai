@@ -159,6 +159,30 @@ export async function fetchAuthenticatedImageBlobUrl(
 
 function hasForbiddenMagicBytes(bytes: Uint8Array): boolean {
   if (bytes.length < 4) return true;
+  const isPart10Dicom =
+    bytes.length >= 132 &&
+    bytes[128] === 0x44 && // 'D'
+    bytes[129] === 0x49 && // 'I'
+    bytes[130] === 0x43 && // 'C'
+    bytes[131] === 0x4d; // 'M'
+
+  const headText = new TextDecoder("utf-8", { fatal: false })
+    .decode(bytes.slice(0, 128))
+    .toLowerCase();
+  if (
+    headText.includes("<script") ||
+    headText.includes("<?php") ||
+    headText.includes("<html") ||
+    headText.includes("<!doctype html") ||
+    headText.includes("<svg")
+  ) {
+    return true;
+  }
+
+  if (isPart10Dicom) {
+    return false;
+  }
+
   // MZ (Windows PE), ELF, #!, PK (ZIP), %PDF
   if (bytes[0] === 0x4d && bytes[1] === 0x5a) return true;
   if (
@@ -183,19 +207,6 @@ function hasForbiddenMagicBytes(bytes: Uint8Array): boolean {
     bytes[1] === 0x50 &&
     bytes[2] === 0x44 &&
     bytes[3] === 0x46
-  ) {
-    return true;
-  }
-  const headText = new TextDecoder("utf-8", { fatal: false })
-    .decode(bytes.slice(0, 32))
-    .trimStart()
-    .toLowerCase();
-  if (
-    headText.startsWith("<!doctype html") ||
-    headText.startsWith("<html") ||
-    headText.startsWith("<script") ||
-    headText.startsWith("<?php") ||
-    headText.startsWith("<svg")
   ) {
     return true;
   }

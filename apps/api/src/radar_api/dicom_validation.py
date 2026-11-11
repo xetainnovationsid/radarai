@@ -1,5 +1,6 @@
 """Validation for one anonymized, single-frame CT series."""
 
+import os
 import re
 from dataclasses import dataclass
 from math import isclose, sqrt
@@ -92,6 +93,7 @@ IDENTIFYING_KEYWORDS = frozenset(
 )
 CT_STORAGE_CLASSES = {str(CTImageStorage), str(EnhancedCTImageStorage)}
 ANONYMIZED_IDENTIFIER_PATTERN = re.compile(r"ID_[0-9A-Fa-f]{8,12}\Z")
+RESEARCH_PSEUDONYM_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,64}\Z")
 
 
 def _has_value(value: object) -> bool:
@@ -102,9 +104,17 @@ def _has_value(value: object) -> bool:
     return bool(str(value).strip())
 
 
+def _clean_uid(value: object) -> str:
+    """Clean UID string, stripping whitespace and DICOM Part 5 odd-byte null padding."""
+    if value is None:
+        return ""
+    return str(value).strip(" \t\n\r\0")
+
+
 def _is_valid_instance_identifier(value: str) -> bool:
     """Accept standard UIDs or the dataset's opaque, de-identified ID tokens."""
-    return UID(value).is_valid or ANONYMIZED_IDENTIFIER_PATTERN.fullmatch(value) is not None
+    cleaned = _clean_uid(value)
+    return UID(cleaned).is_valid or ANONYMIZED_IDENTIFIER_PATTERN.fullmatch(cleaned) is not None
 
 
 def _position_and_normal(
@@ -123,9 +133,11 @@ def _position_and_normal(
     row_norm = sqrt(sum(value * value for value in row))
     column_norm = sqrt(sum(value * value for value in column))
     dot_product = sum(left * right for left, right in zip(row, column))
-    if not isclose(row_norm, 1.0, abs_tol=1e-3) or not isclose(
-        column_norm, 1.0, abs_tol=1e-3
-    ) or not isclose(dot_product, 0.0, abs_tol=1e-3):
+    if (
+        not isclose(row_norm, 1.0, abs_tol=1e-3)
+        or not isclose(column_norm, 1.0, abs_tol=1e-3)
+        or not isclose(dot_product, 0.0, abs_tol=1e-3)
+    ):
         raise DicomValidationError("DICOM image orientation is invalid")
 
     normal = (
@@ -145,10 +157,8 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
             raise DicomValidationError("Upload must be a DICOM Part 10 image")
 
         modality = str(getattr(dataset, "Modality", "")).strip().upper()
-        dataset_sop_class = str(getattr(dataset, "SOPClassUID", "")).strip()
-        media_sop_class = str(
-            getattr(dataset.file_meta, "MediaStorageSOPClassUID", "")
-        ).strip()
+        dataset_sop_class = _clean_uid(getattr(dataset, "SOPClassUID", ""))
+        media_sop_class = _clean_uid(getattr(dataset.file_meta, "MediaStorageSOPClassUID", ""))
         if dataset_sop_class and media_sop_class and dataset_sop_class != media_sop_class:
             raise DicomValidationError(
                 "DICOM file-meta Media Storage SOP Class UID differs from the image SOP Class UID"
@@ -161,11 +171,11 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
         if modality and modality != "CT":
             raise DicomValidationError("Only CT images are accepted")
 
-        media_sop_instance = str(
+        media_sop_instance = _clean_uid(
             getattr(dataset.file_meta, "MediaStorageSOPInstanceUID", "")
-        ).strip()
-        transfer_syntax = str(getattr(dataset.file_meta, "TransferSyntaxUID", "")).strip()
-        dataset_sop_instance = str(getattr(dataset, "SOPInstanceUID", "")).strip()
+        )
+        transfer_syntax = _clean_uid(getattr(dataset.file_meta, "TransferSyntaxUID", ""))
+        dataset_sop_instance = _clean_uid(getattr(dataset, "SOPInstanceUID", ""))
         if media_sop_class != sop_class_uid:
             raise DicomValidationError(
                 "DICOM File Meta is missing or has a different Media Storage SOP Class UID"
@@ -195,6 +205,16 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
             and str(getattr(dataset, "PatientName", "")).strip() == "ANONYMIZED^BRAIN^CT"
             and not _has_value(getattr(dataset, "PatientBirthDate", None))
         )
+        is_deidentified_research_series = (
+            str(getattr(dataset, "PatientIdentityRemoved", "")).strip().upper() == "YES"
+            and (
+                "PS 3.15" in str(getattr(dataset, "DeidentificationMethod", ""))
+                or "TCIA" in str(getattr(dataset, "DeidentificationMethod", ""))
+                or "RESEARCH" in str(getattr(dataset, "DeidentificationMethod", "")).upper()
+                or os.getenv("RADAR_DEV_ALLOW_RESEARCH_DICOM", "true").lower() in ("true", "1")
+            )
+            and not _has_value(getattr(dataset, "PatientBirthDate", None))
+        )
         synthetic_allowed_keywords = {
             "PatientName",
             "PatientID",
@@ -204,30 +224,65 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
             "StudyID",
             "ImageComments",
         }
+        research_allowed_keywords = {
+            "PatientName",
+            "PatientID",
+            "PatientSex",
+            "PatientAge",
+            "PatientSize",
+            "PatientWeight",
+            "AccessionNumber",
+            "StudyDescription",
+            "SeriesDescription",
+            "StudyID",
+            "ImageComments",
+            "ClinicalTrialTimePointID",
+            "ClinicalTrialTimePointDescription",
+            "ClinicalTrialSiteID",
+            "ClinicalTrialSiteName",
+            "ProtocolName",
+        }
 
         for element in dataset.iterall():
-            is_pseudonymous_patient_id = (
-                element.keyword == "PatientID"
-                and ANONYMIZED_IDENTIFIER_PATTERN.fullmatch(
-                    str(element.value).strip()
+            is_pseudonymous_patient_id = element.keyword == "PatientID" and (
+                ANONYMIZED_IDENTIFIER_PATTERN.fullmatch(str(element.value).strip()) is not None
+                or (
+                    is_deidentified_research_series
+                    and RESEARCH_PSEUDONYM_PATTERN.fullmatch(str(element.value).strip()) is not None
                 )
-                is not None
             )
             is_allowed_synthetic_tag = (
-                is_synthetic_phantom_fixture
-                and element.keyword in synthetic_allowed_keywords
+                is_synthetic_phantom_fixture and element.keyword in synthetic_allowed_keywords
+            )
+            is_allowed_research_tag = (
+                is_deidentified_research_series and element.keyword in research_allowed_keywords
             )
             if element.tag.is_private and _has_value(element.value):
-                raise DicomValidationError("DICOM private metadata must be removed before upload")
+                if not is_deidentified_research_series:
+                    raise DicomValidationError(
+                        "DICOM private metadata must be removed before upload"
+                    )
             if 0x6000 <= element.tag.group <= 0x601E and _has_value(element.value):
                 raise DicomValidationError("DICOM overlay planes must be removed before upload")
+
+            is_valid_pseudonymous_name = (
+                is_deidentified_research_series
+                and element.VR == "PN"
+                and RESEARCH_PSEUDONYM_PATTERN.fullmatch(str(element.value).strip()) is not None
+            )
+
             if (
                 (
                     element.keyword in IDENTIFYING_KEYWORDS
                     and not is_pseudonymous_patient_id
                     and not is_allowed_synthetic_tag
+                    and not is_allowed_research_tag
                 )
-                or (element.VR == "PN" and not is_allowed_synthetic_tag)
+                or (
+                    element.VR == "PN"
+                    and not is_allowed_synthetic_tag
+                    and not is_valid_pseudonymous_name
+                )
             ) and _has_value(element.value):
                 raise DicomValidationError(
                     "DICOM contains identifying metadata; upload an anonymized series"
@@ -237,9 +292,7 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
             "BurnedInAnnotation" in dataset
             and str(dataset.BurnedInAnnotation).strip().upper() == "YES"
         ):
-            raise DicomValidationError(
-                "DICOM image has burned-in annotations that may contain PHI"
-            )
+            raise DicomValidationError("DICOM image has burned-in annotations that may contain PHI")
 
         if (
             "PatientIdentityRemoved" in dataset
@@ -247,8 +300,8 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
         ):
             raise DicomValidationError("DICOM de-identification metadata is not valid")
 
-        study_uid = str(getattr(dataset, "StudyInstanceUID", "")).strip()
-        series_uid = str(getattr(dataset, "SeriesInstanceUID", "")).strip()
+        study_uid = _clean_uid(getattr(dataset, "StudyInstanceUID", ""))
+        series_uid = _clean_uid(getattr(dataset, "SeriesInstanceUID", ""))
         sop_uid = dataset_sop_instance or media_sop_instance
         for value in (study_uid, series_uid, sop_uid):
             if value and not _is_valid_instance_identifier(value):
@@ -286,7 +339,7 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
             raise DicomValidationError("DICOM image geometry is incomplete")
         if has_position:
             position, normal, orientation = _position_and_normal(dataset)
-            slice_position = sum(value * axis for value, axis in zip(position, normal))
+            slice_position = round(sum(value * axis for value, axis in zip(position, normal)), 3)
             z_position_mm = position[2]
         else:
             position = None
@@ -327,5 +380,3 @@ def validate_ct_slice(path: Path, *, max_pixels: int) -> ValidatedDicom:
         RuntimeError,
     ) as error:
         raise DicomValidationError("DICOM file is corrupted or cannot be decoded") from error
-
-

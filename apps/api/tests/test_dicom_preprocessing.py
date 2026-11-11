@@ -136,9 +136,4 @@ def test_iterable_loader_batches_without_exceeding_configured_estimate(tmp_path:
 
 def test_loader_rejects_budgets_above_12_gib() -> None:
     with pytest.raises(ValueError, match="12 GiB"):
-        list(
-            iter_dicom_batches(
-                [], memory_budget_bytes=12 * 1024**3 + 1
-            )
-        )
-
+        list(iter_dicom_batches([], memory_budget_bytes=12 * 1024**3 + 1))

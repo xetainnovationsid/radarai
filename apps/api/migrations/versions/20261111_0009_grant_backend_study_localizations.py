@@ -14,13 +14,9 @@ depends_on = None
 
 def upgrade() -> None:
     if op.get_bind().dialect.name == "postgresql":
-        op.execute(
-            "GRANT SELECT, INSERT ON TABLE public.study_localizations TO radar_backend"
-        )
+        op.execute("GRANT SELECT, INSERT ON TABLE public.study_localizations TO radar_backend")
 
 
 def downgrade() -> None:
     if op.get_bind().dialect.name == "postgresql":
-        op.execute(
-            "REVOKE SELECT, INSERT ON TABLE public.study_localizations FROM radar_backend"
-        )
+        op.execute("REVOKE SELECT, INSERT ON TABLE public.study_localizations FROM radar_backend")

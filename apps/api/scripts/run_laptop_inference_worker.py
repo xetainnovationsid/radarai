@@ -111,8 +111,13 @@ def _run_job(client: httpx.Client, job: dict[str, str], slices: list[dict[str, o
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat_job,
-        args=(str(client.base_url).rstrip("/"), client.headers["Authorization"], job_id,
-              lease_headers, heartbeat_stop),
+        args=(
+            str(client.base_url).rstrip("/"),
+            client.headers["Authorization"],
+            job_id,
+            lease_headers,
+            heartbeat_stop,
+        ),
         name=f"radar-heartbeat-{job_id[:8]}",
         daemon=True,
     )
@@ -145,9 +150,7 @@ def _run_job(client: httpx.Client, job: dict[str, str], slices: list[dict[str, o
             try:
                 localization_result = localize_dicom_series(tuple(str(path) for path in paths))
                 localization_rows = []
-                for slice_id, output in zip(
-                    slice_ids, localization_result["slices"], strict=True
-                ):
+                for slice_id, output in zip(slice_ids, localization_result["slices"], strict=True):
                     localization_rows.append(
                         {
                             "slice_id": slice_id,

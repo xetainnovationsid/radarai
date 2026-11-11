@@ -35,6 +35,20 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function sanitizeRedirectPath(raw: string | null): string {
+  if (!raw) return "/";
+  const trimmed = raw.trim();
+  if (
+    !trimmed.startsWith("/") ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("/\\") ||
+    trimmed.includes("://")
+  ) {
+    return "/";
+  }
+  return trimmed;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -48,6 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function restoreSession() {
       const stored = loadStoredSession();
       if (!stored) {
+        if (authRequired) {
+          await signOutFirebase().catch(() => undefined);
+        }
         if (!ignore) setLoading(false);
         return;
       }
@@ -59,6 +76,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       const refreshed = await refreshFirebaseSession(stored);
+      if (!refreshed && authRequired) {
+        await signOutFirebase().catch(() => undefined);
+      }
       if (!ignore) {
         setUser(refreshed);
         setLoading(false);
@@ -106,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else if (user && isLoginPage) {
       if (typeof window !== "undefined") {
         const params = new URLSearchParams(window.location.search);
-        const destination = params.get("redirect") || "/";
+        const destination = sanitizeRedirectPath(params.get("redirect"));
         router.replace(destination);
       } else {
         router.replace("/");

@@ -1,13 +1,23 @@
 import logging
 import tempfile
 from io import BytesIO
-from math import isclose
+from math import isclose, isfinite
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from PIL import Image
@@ -327,7 +337,7 @@ def delete_empty_study(
     _principal: Principal = Depends(require_authenticated_principal),
     _owner: Principal = Depends(require_owned_study),
 ) -> Response:
-    """Remove only an empty study record created by an upload that did not complete."""
+    """Remove an unfinalized study record created by an upload that did not complete."""
 
     study = session.scalar(
         select(StudyRecord)
@@ -337,12 +347,19 @@ def delete_empty_study(
     )
     if study is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    if study.slices:
+    if study.status == "ready":
         raise HTTPException(
             status_code=409,
-            detail="A study with uploaded slices cannot be deleted",
+            detail="A finalized study with uploaded slices cannot be deleted",
         )
+    asset_ids = [item.image_asset_id for item in study.slices]
     session.delete(study)
+    session.flush()
+    if asset_ids:
+        for asset in session.scalars(
+            select(ImageAssetRecord).where(ImageAssetRecord.image_asset_id.in_(asset_ids))
+        ):
+            session.delete(asset)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -436,6 +453,7 @@ def list_report_drafts(
         session.scalars(
             select(ReportDraftRecord)
             .where(ReportDraftRecord.study_id == study_id)
+            .options(selectinload(ReportDraftRecord.model_version))
             .order_by(ReportDraftRecord.version.desc())
         ).all()
     )
@@ -451,8 +469,8 @@ def list_report_drafts(
             "created_at": record.created_at,
             "generation_mode": "deepseek_api" if record.model_version_id else "manual_fallback",
             "model_id": (
-                session.get(ModelVersionRecord, record.model_version_id).model_id
-                if record.model_version_id
+                record.model_version.model_id
+                if record.model_version is not None
                 else None
             ),
         }
@@ -771,7 +789,10 @@ def get_study_localizations(
         select(StudyLocalizationRecord)
         .where(StudyLocalizationRecord.study_id == study_id)
         .options(selectinload(StudyLocalizationRecord.model_version))
-        .order_by(StudyLocalizationRecord.created_at.desc(), StudyLocalizationRecord.localization_id.desc())
+        .order_by(
+            StudyLocalizationRecord.created_at.desc(),
+            StudyLocalizationRecord.localization_id.desc(),
+        )
         .limit(1)
     )
     if record is None:
@@ -785,9 +806,9 @@ def get_study_localizations(
     return {
         "schema_version": "1.0.0",
         "study_id": study.study_id,
-        "model_id": model.model_id,
-        "checkpoint_sha256": model.artifact_sha256,
-        "device": model.device or "unknown",
+        "model_id": model.model_id if model is not None else "samihs-v1",
+        "checkpoint_sha256": model.artifact_sha256 if model is not None else "",
+        "device": (model.device if model is not None else None) or "unknown",
         "threshold": record.threshold,
         "score_semantics": "SAMIHS binary ICH segmentation mask; research localization only",
         "slices": record.slices,
@@ -970,7 +991,7 @@ def get_slice_dicom(
             StudySliceRecord.study_id == study_id,
             StudySliceRecord.slice_id == slice_id,
         )
-        .options(selectinload(StudySliceRecord.image_asset))
+        .options(selectinload(StudySliceRecord.image_asset).undefer(ImageAssetRecord.dicom_data))
     )
     if record is None:
         raise HTTPException(status_code=404, detail="Study slice not found")
@@ -1008,7 +1029,7 @@ def get_slice_preview(
             StudySliceRecord.study_id == study_id,
             StudySliceRecord.slice_id == slice_id,
         )
-        .options(selectinload(StudySliceRecord.image_asset))
+        .options(selectinload(StudySliceRecord.image_asset).undefer(ImageAssetRecord.dicom_data))
     )
     if record is None:
         raise HTTPException(status_code=404, detail="Study slice not found")
@@ -1016,9 +1037,7 @@ def get_slice_preview(
     try:
         payload = record.image_asset.dicom_data
         if payload is None:
-            payload = PrivateImageStore().path_for(
-                record.image_asset.storage_key
-            ).read_bytes()
+            payload = PrivateImageStore().path_for(record.image_asset.storage_key).read_bytes()
         dataset = dcmread(BytesIO(payload), force=False)
         pixels = dataset.pixel_array.astype(np.float32)
         pixels = pixels * float(getattr(dataset, "RescaleSlope", 1)) + float(
@@ -1032,11 +1051,11 @@ def get_slice_preview(
             window_center = window_center[0]
         width = float(window_width)
         level = float(window_center)
-        if width <= 0:
+        if width < 1.0 or not isfinite(width):
             raise ValueError("Invalid window width")
         low, high = level - width / 2, level + width / 2
         pixels = np.clip((pixels - low) / (high - low), 0, 1)
-        if str(getattr(dataset, "PhotometricInterpretation", "")) == "MONOCHROME1":
+        if str(getattr(dataset, "PhotometricInterpretation", "")).strip() == "MONOCHROME1":
             pixels = 1 - pixels
         image = Image.fromarray((pixels * 255).astype(np.uint8), mode="L")
         buffer = BytesIO()
@@ -1093,9 +1112,7 @@ async def upload_dicom_series(
     study = session.scalar(
         select(StudyRecord)
         .where(StudyRecord.study_id == study_id)
-        .options(
-            selectinload(StudyRecord.slices).selectinload(StudySliceRecord.image_asset)
-        )
+        .options(selectinload(StudyRecord.slices).selectinload(StudySliceRecord.image_asset))
         .with_for_update()
     )
     if study is None:
@@ -1105,25 +1122,25 @@ async def upload_dicom_series(
     if study.status == "ready" and study.upload_expected_slices != total_files:
         raise HTTPException(status_code=409, detail="Study already has a finalized DICOM series")
 
-    staging_store = PrivateImageStore(
-        root=Path(tempfile.gettempdir()) / "radar-dicom-staging"
-    )
+    staging_store = PrivateImageStore(root=Path(tempfile.gettempdir()) / "radar-dicom-staging")
     staged_path: Path | None = None
     try:
-        staged = await stage_upload(
-            files[0], staging_store, limits, already_staged_bytes=0
-        )
+        staged = await stage_upload(files[0], staging_store, limits, already_staged_bytes=0)
         staged_path = staged.path
         validated = validate_ct_slice(staged.path, max_pixels=limits.max_pixels)
         existing = next((item for item in study.slices if item.index == slice_index), None)
         if existing is not None:
             if existing.image_asset.sha256 != staged.sha256:
-                raise HTTPException(status_code=409, detail="A different slice already uses this index")
+                raise HTTPException(
+                    status_code=409, detail="A different slice already uses this index"
+                )
             if study.status == "ready":
                 return study
         else:
             if study.status == "ready":
-                raise HTTPException(status_code=409, detail="Study already has a finalized DICOM series")
+                raise HTTPException(
+                    status_code=409, detail="Study already has a finalized DICOM series"
+                )
             if study.upload_expected_slices is None:
                 study.upload_expected_slices = total_files
             already_stored_bytes = sum(item.image_asset.size_bytes for item in study.slices)
@@ -1190,9 +1207,9 @@ async def upload_dicom_series(
         session.flush()
 
         if finalize:
-            if len(study.slices) != total_files or {
-                item.index for item in study.slices
-            } != set(range(total_files)):
+            if len(study.slices) != total_files or {item.index for item in study.slices} != set(
+                range(total_files)
+            ):
                 raise DicomValidationError("Upload is incomplete; some DICOM slices are missing")
             stored = [item.dicom_metadata for item in study.slices]
             has_geometry = [item.get("slice_position") is not None for item in stored]
@@ -1206,15 +1223,20 @@ async def upload_dicom_series(
                     raise DicomValidationError(
                         "Multiple slices need complete position metadata or unique Instance Numbers"
                     )
-            sop_uids = [item.get("sop_instance_uid") for item in stored if item.get("sop_instance_uid")]
+            sop_uids = [
+                item.get("sop_instance_uid") for item in stored if item.get("sop_instance_uid")
+            ]
             if len(set(sop_uids)) != len(sop_uids):
                 raise DicomValidationError("DICOM series contains duplicate image instances")
             ordered = sorted(
                 study.slices,
                 key=lambda item: (
-                    item.dicom_metadata.get("slice_position")
+                    round(item.dicom_metadata.get("slice_position"), 3)
                     if item.dicom_metadata.get("slice_position") is not None
                     else float(item.dicom_metadata.get("instance_number") or 0),
+                    item.dicom_metadata.get("instance_number")
+                    if item.dicom_metadata.get("instance_number") is not None
+                    else 0,
                     item.dicom_metadata.get("sop_instance_uid") or item.image_asset.sha256,
                 ),
             )

@@ -143,11 +143,7 @@ def score_dicom_files(
                 if logits.shape != (1, expected_width):
                     raise InferenceError("Model output width does not match checkpoint labels")
                 probabilities = torch.sigmoid(logits[0]).detach().cpu().tolist()
-                scores = (
-                    [1.0 - probabilities[0], probabilities[0]]
-                    if binary
-                    else probabilities
-                )
+                scores = [1.0 - probabilities[0], probabilities[0]] if binary else probabilities
                 outputs.append(
                     {"file": path.name, "scores": dict(zip(labels, scores, strict=True))}
                 )
@@ -190,4 +186,3 @@ def write_results(
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-

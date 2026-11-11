@@ -2,12 +2,18 @@
 
 import os
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./radar.db")
+_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "radar.db"
+_RAW_DB_URL = os.getenv("DATABASE_URL", "").strip()
+if not _RAW_DB_URL or _RAW_DB_URL == "sqlite:///./radar.db":
+    DATABASE_URL = f"sqlite:///{_DEFAULT_DB_PATH}"
+else:
+    DATABASE_URL = _RAW_DB_URL
 if DATABASE_URL.startswith("sqlite"):
     _connect_args = {"check_same_thread": False}
 elif DATABASE_URL.startswith("postgresql+psycopg://"):

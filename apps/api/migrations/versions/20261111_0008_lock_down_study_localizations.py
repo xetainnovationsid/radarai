@@ -26,9 +26,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_study_localizations_model_version_id", table_name="study_localizations"
-    )
+    op.drop_index("ix_study_localizations_model_version_id", table_name="study_localizations")
     if op.get_bind().dialect.name == "postgresql":
         op.execute("ALTER TABLE public.study_localizations DISABLE ROW LEVEL SECURITY")
         op.execute(

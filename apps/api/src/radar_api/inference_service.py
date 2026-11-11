@@ -88,4 +88,3 @@ def score_local_checkpoint(paths: list[Path]) -> dict[str, Any]:
         "device": device,
         "slices": scores,
     }
-

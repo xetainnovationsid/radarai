@@ -16,6 +16,31 @@ export const NON_CLINICAL_REPORT_DISCLAIMER =
 
 const STORAGE_PREFIX = "radar_report_draft_v1_";
 
+function evictOldestDrafts(targetStudyId: string, maxRetained = 20): void {
+  if (typeof window === "undefined") return;
+  try {
+    const keys: { key: string; updatedAt: number }[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith(STORAGE_PREFIX) && k !== `${STORAGE_PREFIX}${targetStudyId}`) {
+        try {
+          const item = JSON.parse(window.localStorage.getItem(k) || "{}");
+          keys.push({ key: k, updatedAt: new Date(item.updated_at || 0).getTime() });
+        } catch {
+          keys.push({ key: k, updatedAt: 0 });
+        }
+      }
+    }
+    keys.sort((a, b) => a.updatedAt - b.updatedAt);
+    while (keys.length >= maxRetained) {
+      const oldest = keys.shift();
+      if (oldest) window.localStorage.removeItem(oldest.key);
+    }
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
 const REPORT_STATUS_LABELS: Record<ReportReviewStatus, string> = {
   draft: "DRAFT · Draf Awal",
   in_review: "IN REVIEW · Sedang Ditinjau",
@@ -287,10 +312,18 @@ export function ReportEditor({
 
     try {
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          `${STORAGE_PREFIX}${study.study_id}`,
-          JSON.stringify(nextDraft)
-        );
+        try {
+          window.localStorage.setItem(
+            `${STORAGE_PREFIX}${study.study_id}`,
+            JSON.stringify(nextDraft)
+          );
+        } catch {
+          evictOldestDrafts(study.study_id, 10);
+          window.localStorage.setItem(
+            `${STORAGE_PREFIX}${study.study_id}`,
+            JSON.stringify(nextDraft)
+          );
+        }
       }
       const timeLabel = new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",

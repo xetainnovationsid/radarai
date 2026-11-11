@@ -9,6 +9,7 @@ import {
   imageLoader,
   metaData,
   utilities,
+  cache,
   type Types,
 } from "@cornerstonejs/core";
 import { apiFetch } from "@/lib/api-client";
@@ -68,145 +69,236 @@ export interface CornerstoneViewportProps {
   slicePositiveScore?: number | null;
 }
 
+const MAX_PARSED_SLICE_CACHE_SIZE = 128;
 const parsedSliceCache = new Map<string, ParsedDicomSlice>();
+const inFlightSliceFetches = new Map<string, Promise<ParsedDicomSlice>>();
 const customMetadataStore = new Map<string, Record<string, unknown>>();
 let cornerstoneReadyPromise: Promise<boolean> | null = null;
 
+function pruneSliceCache(): void {
+  while (parsedSliceCache.size > MAX_PARSED_SLICE_CACHE_SIZE) {
+    const oldestKey = parsedSliceCache.keys().next().value;
+    if (oldestKey) {
+      parsedSliceCache.delete(oldestKey);
+      customMetadataStore.delete(oldestKey);
+    } else {
+      break;
+    }
+  }
+}
+
+export function clearCornerstoneSliceCache(): void {
+  parsedSliceCache.clear();
+  customMetadataStore.clear();
+}
+
 async function parseDicomFromImageId(imageId: string): Promise<ParsedDicomSlice> {
   const cached = parsedSliceCache.get(imageId);
-  if (cached) return cached;
-
-  const url = imageId.replace(/^wadouri:/i, "");
-  const response = url.startsWith("/v1/") ? await apiFetch(url) : await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch DICOM slice at ${url} (HTTP ${response.status})`);
+  if (cached) {
+    parsedSliceCache.delete(imageId);
+    parsedSliceCache.set(imageId, cached);
+    return cached;
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  const byteArray = new Uint8Array(arrayBuffer);
-  const dataSet = dicomParser.parseDicom(byteArray);
+  const inFlight = inFlightSliceFetches.get(imageId);
+  if (inFlight) return inFlight;
 
-  const rows = dataSet.uint16("x00280010") ?? 256;
-  const columns = dataSet.uint16("x00280011") ?? 256;
-  const rescaleIntercept = parseFloat(dataSet.string("x00281052") ?? "-1024");
-  const rescaleSlope = parseFloat(dataSet.string("x00281053") ?? "1");
-  const windowCenter = parseFloat(dataSet.string("x00281050") ?? "40");
-  const windowWidth = parseFloat(dataSet.string("x00281051") ?? "80");
+  const fetchPromise = (async () => {
+    const url = imageId.replace(/^wadouri:/i, "");
+    let response: Response;
+    let attempts = 0;
+    while (true) {
+      response = url.startsWith("/v1/") ? await apiFetch(url) : await fetch(url);
+      if (response.status === 429 && attempts < 3) {
+        attempts++;
+        const retryAfterHeader = response.headers.get("retry-after");
+        const retryDelay = retryAfterHeader
+          ? Math.max(500, parseInt(retryAfterHeader, 10) * 1000)
+          : attempts * 500;
+        await new Promise((r) => setTimeout(r, retryDelay));
+        continue;
+      }
+      break;
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to fetch DICOM slice at ${url} (HTTP ${response.status})`);
+    }
 
-  const spacingStr = dataSet.string("x00280030") ?? "0.9375\\0.9375";
-  const spacingParts = spacingStr.split("\\").map((v: string) => parseFloat(v));
-  const pixelSpacing: [number, number] = [
-    spacingParts[0] || 0.9375,
-    spacingParts[1] || 0.9375,
-  ];
+    const arrayBuffer = await response.arrayBuffer();
+    const byteArray = new Uint8Array(arrayBuffer);
+    const dataSet = dicomParser.parseDicom(byteArray);
 
-  const rawSliceLocation = dataSet.string("x00201041");
-  const posStr = dataSet.string("x00200032") ?? `-120\\-120\\${rawSliceLocation ?? "0"}`;
-  const imagePositionPatient = posStr.split("\\").map((v: string) => parseFloat(v) || 0) as [
-    number,
-    number,
-    number,
-  ];
-  const sliceLocation =
-    rawSliceLocation !== undefined
-      ? parseFloat(rawSliceLocation)
-      : (imagePositionPatient[2] ?? 0);
+    const rows = dataSet.uint16("x00280010") ?? 256;
+    const columns = dataSet.uint16("x00280011") ?? 256;
+    const rescaleIntercept = parseFloat(dataSet.string("x00281052") ?? "-1024");
+    const rescaleSlope = parseFloat(dataSet.string("x00281053") ?? "1");
+    const windowCenter = parseFloat(dataSet.string("x00281050") ?? "40");
+    const windowWidth = parseFloat(dataSet.string("x00281051") ?? "80");
 
-  const frameOfReferenceUID =
-    dataSet.string("x00200052") ?? "1.2.826.0.1.3680043.8.498.2026.101.0";
+    const spacingStr = dataSet.string("x00280030") ?? "0.9375\\0.9375";
+    const spacingParts = spacingStr.split("\\").map((v: string) => parseFloat(v));
+    const pixelSpacing: [number, number] = [
+      spacingParts[0] || 0.9375,
+      spacingParts[1] || 0.9375,
+    ];
 
-  const pixelElement = dataSet.elements.x7fe00010;
-  if (!pixelElement) {
-    throw new Error(`DICOM dataset ${url} is missing PixelData (7FE0,0010)`);
-  }
+    const rawSliceLocation = dataSet.string("x00201041");
+    const posStr = dataSet.string("x00200032") ?? `-120\\-120\\${rawSliceLocation ?? "0"}`;
+    const imagePositionPatient = posStr.split("\\").map((v: string) => parseFloat(v) || 0) as [
+      number,
+      number,
+      number,
+    ];
+    const sliceLocation =
+      rawSliceLocation !== undefined
+        ? parseFloat(rawSliceLocation)
+        : (imagePositionPatient[2] ?? 0);
 
-  const pixelRepresentation = dataSet.uint16("x00280103") ?? 0;
-  const totalPixels = rows * columns;
-  const huData = new Int16Array(totalPixels);
-  const pixelView = new DataView(
-    byteArray.buffer,
-    byteArray.byteOffset + pixelElement.dataOffset,
-    pixelElement.length
-  );
+    const frameOfReferenceUID =
+      dataSet.string("x00200052") ?? "1.2.826.0.1.3680043.8.498.2026.101.0";
 
-  for (let i = 0; i < totalPixels; i++) {
-    const stored =
-      pixelRepresentation === 1
-        ? pixelView.getInt16(i * 2, true)
-        : pixelView.getUint16(i * 2, true);
-    huData[i] = Math.round(stored * rescaleSlope + rescaleIntercept);
-  }
+    const rawOrientation = dataSet.string("x00200037");
+    const orientation = rawOrientation
+      ? (rawOrientation.split("\\").map((v: string) => parseFloat(v) || 0) as [
+          number,
+          number,
+          number,
+          number,
+          number,
+          number,
+        ])
+      : [1, 0, 0, 0, 1, 0];
+    const rowCosines: [number, number, number] = [
+      orientation[0] ?? 1,
+      orientation[1] ?? 0,
+      orientation[2] ?? 0,
+    ];
+    const columnCosines: [number, number, number] = [
+      orientation[3] ?? 0,
+      orientation[4] ?? 1,
+      orientation[5] ?? 0,
+    ];
+    const photometricInterpretation =
+      dataSet.string("x00280004")?.trim().toUpperCase() || "MONOCHROME2";
 
-  // Sample Left Basal Ganglia coordinate for metadata verification
-  const roiX = Math.round(columns * (0.5 + 0.24 * 0.38));
-  const roiY = Math.round(rows * (0.5 - 0.03 * 0.44));
-  const roiSampleHu = huData[roiY * columns + roiX] ?? 0;
+    const pixelElement = dataSet.elements.x7fe00010;
+    if (!pixelElement) {
+      throw new Error(`DICOM dataset ${url} is missing PixelData (7FE0,0010)`);
+    }
 
-  const parsed: ParsedDicomSlice = {
-    imageId,
-    rows,
-    columns,
-    huData,
-    rescaleSlope,
-    rescaleIntercept,
-    windowCenter,
-    windowWidth,
-    sliceLocation,
-    pixelSpacing,
-    patientName: dataSet.string("x00100010")?.trim() || "ANONYMIZED",
-    patientId: dataSet.string("x00100020")?.trim() || "DEIDENTIFIED",
-    modality: dataSet.string("x00080060")?.trim() || "CT",
-    seriesDescription:
-      dataSet.string("x0008103e")?.trim() || "Non-Contrast Axial Brain CT",
-    sopInstanceUid: dataSet.string("x00080018")?.trim() || "",
-    transferSyntaxUid:
-      dataSet.string("x00020010")?.trim() || "1.2.840.10008.1.2.1",
-    deidentificationMethod:
-      dataSet.string("x00120063")?.trim() || "DEIDENTIFIED_RESEARCH_SERIES",
-    roiSampleHu,
-  };
+    const bitsAllocated = dataSet.uint16("x00280100") ?? 16;
+    const bitsStored = dataSet.uint16("x00280101") ?? bitsAllocated;
+    const pixelRepresentation = dataSet.uint16("x00280103") ?? 0;
+    const totalPixels = rows * columns;
+    const bytesPerPixel = bitsAllocated / 8;
+    if (
+      (bitsAllocated !== 8 && bitsAllocated !== 16) ||
+      pixelElement.length < totalPixels * bytesPerPixel
+    ) {
+      throw new Error(
+        "Compressed or unsupported PixelData format in browser decoder; switch to API PNG mode."
+      );
+    }
 
-  customMetadataStore.set(imageId, {
-    imagePlaneModule: {
-      frameOfReferenceUID,
+    const huData = new Int16Array(totalPixels);
+    const pixelView = new DataView(
+      byteArray.buffer,
+      byteArray.byteOffset + pixelElement.dataOffset,
+      pixelElement.length
+    );
+
+    const bitMask = bitsStored < 16 ? (1 << bitsStored) - 1 : 0xffff;
+    const signBit = 1 << (bitsStored - 1);
+
+    for (let i = 0; i < totalPixels; i++) {
+      let raw =
+        bitsAllocated === 8
+          ? pixelView.getUint8(i)
+          : pixelView.getUint16(i * 2, true);
+      raw &= bitMask;
+      if (pixelRepresentation === 1 && (raw & signBit) !== 0) {
+        raw -= 1 << bitsStored;
+      }
+      huData[i] = Math.round(raw * rescaleSlope + rescaleIntercept);
+    }
+
+    // Sample Left Basal Ganglia coordinate for metadata verification
+    const roiX = Math.round(columns * (0.5 + 0.24 * 0.38));
+    const roiY = Math.round(rows * (0.5 - 0.03 * 0.44));
+    const roiSampleHu = huData[roiY * columns + roiX] ?? 0;
+
+    const parsed: ParsedDicomSlice = {
+      imageId,
       rows,
       columns,
-      imageOrientationPatient: [1, 0, 0, 0, 1, 0],
-      rowCosines: [1, 0, 0],
-      columnCosines: [0, 1, 0],
-      imagePositionPatient,
-      pixelSpacing,
-      rowPixelSpacing: pixelSpacing[0],
-      columnPixelSpacing: pixelSpacing[1],
-      sliceThickness: 5.0,
+      huData,
+      rescaleSlope,
+      rescaleIntercept,
+      windowCenter,
+      windowWidth,
       sliceLocation,
-    },
-    imagePixelModule: {
-      samplesPerPixel: 1,
-      photometricInterpretation: "MONOCHROME2",
-      rows,
-      columns,
-      bitsAllocated: 16,
-      bitsStored: 16,
-      highBit: 15,
-      pixelRepresentation: 1,
-    },
-    voiLutModule: {
-      windowCenter: [windowCenter],
-      windowWidth: [windowWidth],
-    },
-    modalityLutModule: {
-      rescaleIntercept: 0,
-      rescaleSlope: 1,
-      rescaleType: "HU",
-    },
-    generalSeriesModule: {
-      modality: parsed.modality,
-    },
+      pixelSpacing,
+      patientName: dataSet.string("x00100010")?.trim() || "ANONYMIZED",
+      patientId: dataSet.string("x00100020")?.trim() || "DEIDENTIFIED",
+      modality: dataSet.string("x00080060")?.trim() || "CT",
+      seriesDescription:
+        dataSet.string("x0008103e")?.trim() || "Non-Contrast Axial Brain CT",
+      sopInstanceUid: dataSet.string("x00080018")?.trim() || "",
+      transferSyntaxUid:
+        dataSet.string("x00020010")?.trim() || "1.2.840.10008.1.2.1",
+      deidentificationMethod:
+        dataSet.string("x00120063")?.trim() || "DEIDENTIFIED_RESEARCH_SERIES",
+      roiSampleHu,
+    };
+
+    customMetadataStore.set(imageId, {
+      imagePlaneModule: {
+        frameOfReferenceUID,
+        rows,
+        columns,
+        imageOrientationPatient: orientation,
+        rowCosines,
+        columnCosines,
+        imagePositionPatient,
+        pixelSpacing,
+        rowPixelSpacing: pixelSpacing[0],
+        columnPixelSpacing: pixelSpacing[1],
+        sliceThickness: 5.0,
+        sliceLocation,
+      },
+      imagePixelModule: {
+        samplesPerPixel: 1,
+        photometricInterpretation,
+        rows,
+        columns,
+        bitsAllocated: 16,
+        bitsStored: 16,
+        highBit: 15,
+        pixelRepresentation: 1,
+      },
+      voiLutModule: {
+        windowCenter: [windowCenter],
+        windowWidth: [windowWidth],
+      },
+      modalityLutModule: {
+        rescaleIntercept: 0,
+        rescaleSlope: 1,
+        rescaleType: "HU",
+      },
+      generalSeriesModule: {
+        modality: parsed.modality,
+      },
+    });
+
+    parsedSliceCache.set(imageId, parsed);
+    pruneSliceCache();
+    return parsed;
+  })().finally(() => {
+    inFlightSliceFetches.delete(imageId);
   });
 
-  parsedSliceCache.set(imageId, parsed);
-  return parsed;
+  inFlightSliceFetches.set(imageId, fetchPromise);
+  return fetchPromise;
 }
 
 function ensureCornerstoneInitialized(): Promise<boolean> {
@@ -222,20 +314,56 @@ function ensureCornerstoneInitialized(): Promise<boolean> {
       }, 10000);
 
       imageLoader.registerImageLoader("wadouri", (imageId: string) => {
-        const promise = parseDicomFromImageId(imageId).then((parsed) => {
-          const localImg = imageLoader.createAndCacheLocalImage(imageId, {
-            scalarData: parsed.huData,
-            dimensions: [parsed.columns, parsed.rows],
-            spacing: [parsed.pixelSpacing[1], parsed.pixelSpacing[0]],
-            origin: [-120, -120, parsed.sliceLocation],
-            direction: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        const promise = (async () => {
+          const parsed = await parseDicomFromImageId(imageId);
+
+          const { rows, columns, huData, pixelSpacing, sliceLocation, windowCenter, windowWidth } = parsed;
+          let minPixelValue = huData[0] ?? 0;
+          let maxPixelValue = huData[0] ?? 0;
+          for (let i = 1; i < huData.length; i++) {
+            const v = huData[i];
+            if (v < minPixelValue) minPixelValue = v;
+            if (v > maxPixelValue) maxPixelValue = v;
+          }
+
+          const voxelManager = utilities.VoxelManager.createImageVoxelManager({
+            width: columns,
+            height: rows,
+            numberOfComponents: 1,
+            scalarData: huData,
+            id: imageId,
           });
-          localImg.windowCenter = parsed.windowCenter;
-          localImg.windowWidth = parsed.windowWidth;
-          localImg.slope = 1;
-          localImg.intercept = 0;
-          return localImg;
-        });
+
+          const image = {
+            imageId,
+            intercept: 0,
+            slope: 1,
+            windowCenter,
+            windowWidth,
+            color: false,
+            rgba: false,
+            numberOfComponents: 1,
+            dataType: "Int16Array",
+            minPixelValue,
+            maxPixelValue,
+            rows,
+            columns,
+            height: rows,
+            width: columns,
+            columnPixelSpacing: pixelSpacing[0],
+            rowPixelSpacing: pixelSpacing[1],
+            sliceThickness: 5.0,
+            sliceLocation,
+            FrameOfReferenceUID: "1.2.826.0.1.3680043.8.498.2026.101.0",
+            invert: false,
+            getPixelData: () => huData,
+            voxelManager,
+            sizeInBytes: huData.byteLength,
+          } as unknown as Types.IImage;
+
+          return image;
+        })();
+
         return { promise };
       });
 
@@ -349,10 +477,24 @@ export function CornerstoneViewport({
     const element = csElementRef.current;
     if (!element || imageIds.length === 0) return;
 
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      setCsEngineReady(false);
+    };
+    const handleContextRestored = () => {
+      setCsEngineReady(true);
+    };
+    element.addEventListener("webglcontextlost", handleContextLost);
+    element.addEventListener("webglcontextrestored", handleContextRestored);
+
     ensureCornerstoneInitialized().then(async (ok) => {
       if (!mounted || !ok || !csElementRef.current) return;
       try {
         const engine = new RenderingEngine(engineId);
+        if (!mounted) {
+          engine.destroy();
+          return;
+        }
         engineRef.current = engine;
 
         engine.enableElement({
@@ -386,11 +528,17 @@ export function CornerstoneViewport({
 
     return () => {
       mounted = false;
-      try {
-        engineRef.current?.destroy();
-        engineRef.current = null;
-      } catch {
-        // Ignore cleanup errors during unmount
+      element.removeEventListener("webglcontextlost", handleContextLost);
+      element.removeEventListener("webglcontextrestored", handleContextRestored);
+      if (engineRef.current) {
+        try {
+          engineRef.current.disableElement(viewportId);
+          engineRef.current.destroy();
+        } catch {
+          // Ignore cleanup errors during unmount
+        } finally {
+          engineRef.current = null;
+        }
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

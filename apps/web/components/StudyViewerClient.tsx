@@ -306,31 +306,25 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
         setAnalysis(resolvedAnalysis);
       }
 
-      await Promise.allSettled([
-        fetchModelScores(safeStudyId)
-          .then((scores) => {
-            setModelScores(scores);
-            void fetchStudyAnalysis(safeStudyId).then(setAnalysis);
-            if (!userInteractedRef.current && scores.slices.length > 0) {
-              const best = scores.slices.reduce((a, b) =>
-                b.class_1_score > a.class_1_score ? b : a
-              );
-              setIndex((current) => (current === 0 ? best.index : current));
-            }
-          })
-          .catch((cause: unknown) =>
-            setScoreError(
-              cause instanceof Error ? cause.message : "Skor model tidak tersedia."
-            )
-          ),
-        fetchStudyLocalizations(safeStudyId)
-          .then(setLocalizations)
-          .catch((cause: unknown) =>
-            setLocalizationError(
-              cause instanceof Error ? cause.message : "Lokalisasi lesi tidak tersedia."
-            )
-          ),
-      ]);
+      const scores = await fetchModelScores(safeStudyId);
+      setModelScores(scores);
+      setScoreError("");
+      void fetchStudyAnalysis(safeStudyId).then(setAnalysis);
+      if (!userInteractedRef.current && scores.slices.length > 0) {
+        const best = scores.slices.reduce((a, b) =>
+          b.class_1_score > a.class_1_score ? b : a
+        );
+        setIndex((current) => (current === 0 ? best.index : current));
+      }
+      try {
+        const locResult = await fetchStudyLocalizations(safeStudyId);
+        setLocalizations(locResult);
+        setLocalizationError("");
+      } catch (locErr: unknown) {
+        setLocalizationError(
+          locErr instanceof Error ? locErr.message : "Lokalisasi lesi tidak tersedia."
+        );
+      }
     } catch (cause) {
       setScoreError(
         cause instanceof Error ? cause.message : "Gagal memperbarui inference."
@@ -381,6 +375,16 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
         .then((scores) => {
           setModelScores(scores);
           void fetchStudyAnalysis(safeStudyId).then(setAnalysis);
+          void fetchStudyLocalizations(safeStudyId)
+            .then((result) => {
+              setLocalizations(result);
+              setLocalizationError("");
+            })
+            .catch((cause: unknown) => {
+              setLocalizationError(
+                cause instanceof Error ? cause.message : "Lokalisasi lesi tidak tersedia."
+              );
+            });
           if (
             !userInteractedRef.current &&
             !resolvedAnalysis?.findings.length &&
@@ -395,13 +399,6 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
         .catch((cause: unknown) =>
           setScoreError(
             cause instanceof Error ? cause.message : "Skor model tidak tersedia."
-          )
-        );
-      void fetchStudyLocalizations(safeStudyId)
-        .then(setLocalizations)
-        .catch((cause: unknown) =>
-          setLocalizationError(
-            cause instanceof Error ? cause.message : "Lokalisasi lesi tidak tersedia."
           )
         );
     } catch (cause) {
@@ -463,6 +460,20 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
               void fetchStudyAnalysis(safeStudyId).then((value) => {
                 if (!ignore) setAnalysis(value);
               });
+              void fetchStudyLocalizations(safeStudyId)
+                .then((result) => {
+                  if (!ignore) {
+                    setLocalizations(result);
+                    setLocalizationError("");
+                  }
+                })
+                .catch((cause: unknown) => {
+                  if (!ignore) {
+                    setLocalizationError(
+                      cause instanceof Error ? cause.message : "Lokalisasi lesi tidak tersedia."
+                    );
+                  }
+                });
               if (
                 !userInteractedRef.current &&
                 !resolvedAnalysis?.findings.length &&
@@ -479,17 +490,6 @@ export function StudyViewerClient({ studyId }: { studyId: string }) {
             if (!ignore) {
               setScoreError(
                 cause instanceof Error ? cause.message : "Skor model tidak tersedia."
-              );
-            }
-          });
-        void fetchStudyLocalizations(safeStudyId)
-          .then((result) => {
-            if (!ignore) setLocalizations(result);
-          })
-          .catch((cause: unknown) => {
-            if (!ignore) {
-              setLocalizationError(
-                cause instanceof Error ? cause.message : "Lokalisasi lesi tidak tersedia."
               );
             }
           });

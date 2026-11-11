@@ -327,9 +327,12 @@ def test_upload_blocks_executable_magic_bytes_and_forbidden_dicom_annotations(
     monkeypatch.setenv("RADAR_STORAGE_DIR", str(tmp_path / "private"))
     study_id = client.post("/v1/studies", json={}).json()["study_id"]
 
+    form_data = {"index": "0", "total_files": "1", "finalize": "true"}
+
     exe_resp = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("malware.dcm", b"MZ\x90\x00\x03\x00\x00\x00", "application/dicom")},
+        data=form_data,
     )
     assert exe_resp.status_code == 422
     assert "forbidden executable" in exe_resp.json()["detail"].lower()
@@ -337,6 +340,7 @@ def test_upload_blocks_executable_magic_bytes_and_forbidden_dicom_annotations(
     html_mime_resp = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("xss.dcm", make_test_dicom(), "text/html")},
+        data=form_data,
     )
     assert html_mime_resp.status_code == 422
     assert "forbidden file content type" in html_mime_resp.json()["detail"].lower()
@@ -344,6 +348,7 @@ def test_upload_blocks_executable_magic_bytes_and_forbidden_dicom_annotations(
     burned_resp = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("burned.dcm", make_test_dicom(burned_in="YES"), "application/dicom")},
+        data=form_data,
     )
     assert burned_resp.status_code == 422
     assert "burned-in annotations" in burned_resp.json()["detail"].lower()
@@ -351,6 +356,7 @@ def test_upload_blocks_executable_magic_bytes_and_forbidden_dicom_annotations(
     overlay_resp = client.post(
         f"/v1/studies/{study_id}/dicom",
         files={"files": ("overlay.dcm", make_test_dicom(with_overlay=True), "application/dicom")},
+        data=form_data,
     )
     assert overlay_resp.status_code == 422
     assert "overlay planes" in overlay_resp.json()["detail"].lower()

@@ -87,9 +87,7 @@ class ImageAssetRecord(Base):
     storage_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    dicom_data: Mapped[bytes | None] = mapped_column(
-        LargeBinary, nullable=True, deferred=True
-    )
+    dicom_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -134,8 +132,12 @@ class InferenceJobRecord(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
     error_code: Mapped[str | None] = mapped_column(String(48), nullable=True)
     lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -196,6 +198,7 @@ class ReportDraftRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
+    model_version: Mapped[ModelVersionRecord | None] = relationship()
 
 
 class StudyAnalysisRecord(Base):
@@ -220,9 +223,7 @@ class StudyAnalysisRecord(Base):
 class StudyLocalizationRecord(Base):
     __tablename__ = "study_localizations"
     __table_args__ = (
-        CheckConstraint(
-            "threshold > 0 AND threshold < 1", name="ck_study_localizations_threshold"
-        ),
+        CheckConstraint("threshold > 0 AND threshold < 1", name="ck_study_localizations_threshold"),
         Index("ix_study_localizations_study_created", "study_id", "created_at"),
     )
 

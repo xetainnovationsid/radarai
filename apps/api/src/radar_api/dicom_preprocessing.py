@@ -48,16 +48,13 @@ def decode_and_window(
     try:
         if path.stat().st_size > max_file_bytes:
             raise PreprocessingError("DICOM file exceeds the configured byte limit")
-        header = dcmread(path, force=False, stop_before_pixels=True)
-        if int(getattr(header, "NumberOfFrames", 1)) != 1:
-            raise PreprocessingError("Only single-frame DICOM images are supported")
-        rows, columns = int(header.Rows), int(header.Columns)
-        if rows < 1 or columns < 1 or rows * columns > max_pixels:
-            raise PreprocessingError("DICOM image exceeds the configured pixel limit")
         dataset = dcmread(path, force=False)
         if int(getattr(dataset, "NumberOfFrames", 1)) != 1:
             raise PreprocessingError("Only single-frame DICOM images are supported")
-        photo = str(getattr(dataset, "PhotometricInterpretation", "MONOCHROME2"))
+        rows, columns = int(dataset.Rows), int(dataset.Columns)
+        if rows < 1 or columns < 1 or rows * columns > max_pixels:
+            raise PreprocessingError("DICOM image exceeds the configured pixel limit")
+        photo = str(getattr(dataset, "PhotometricInterpretation", "MONOCHROME2")).strip()
         if photo not in {"MONOCHROME1", "MONOCHROME2"}:
             raise PreprocessingError("Only monochrome DICOM images are supported")
         raw = dataset.pixel_array
@@ -75,9 +72,7 @@ def decode_and_window(
         else:
             lower = center - 0.5 - (width - 1.0) / 2.0
             upper = center - 0.5 + (width - 1.0) / 2.0
-            image = np.clip((hu - lower) / (upper - lower), 0.0, 1.0).astype(
-                np.float32, copy=False
-            )
+            image = np.clip((hu - lower) / (upper - lower), 0.0, 1.0).astype(np.float32, copy=False)
         if photo == "MONOCHROME1":
             image = np.float32(1.0) - image
         return np.ascontiguousarray(image, dtype=np.float32)
@@ -141,14 +136,14 @@ def build_split_manifest(
 
     assignments: dict[str, SplitName] = {}
     for patient in unique_patients:
-        digest = hmac.new(
-            key, f"{seed}\0{patient}".encode(), hashlib.sha256
-        ).digest()
+        digest = hmac.new(key, f"{seed}\0{patient}".encode(), hashlib.sha256).digest()
         score = int.from_bytes(digest[:8], "big") / 2**64
         split: SplitName = (
-            "train" if score < train_fraction else
-            "validation" if score < train_fraction + validation_fraction else
-            "test"
+            "train"
+            if score < train_fraction
+            else "validation"
+            if score < train_fraction + validation_fraction
+            else "test"
         )
         assignments[patient] = split
 
@@ -184,9 +179,7 @@ def build_split_manifest(
 def write_split_manifest(manifest: dict[str, object], path: Path) -> None:
     """Write a stable JSON representation; caller must choose private storage."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -271,4 +264,3 @@ def iter_dicom_batches(
         estimated_bytes += image_cost
     if pending_images:
         yield emit()
-
