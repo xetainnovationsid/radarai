@@ -333,6 +333,7 @@ def delete_empty_study(
         select(StudyRecord)
         .where(StudyRecord.study_id == study_id)
         .options(selectinload(StudyRecord.slices))
+        .with_for_update()
     )
     if study is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -667,6 +668,7 @@ def create_inference_job(
         select(StudyRecord)
         .where(StudyRecord.study_id == study_id)
         .options(selectinload(StudyRecord.slices))
+        .with_for_update()
     )
     if study is None:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -674,6 +676,18 @@ def create_inference_job(
         raise HTTPException(
             status_code=409, detail="Upload a CT series before requesting inference"
         )
+    if study.upload_expected_slices is not None:
+        expected_indexes = set(range(study.upload_expected_slices))
+        actual_indexes = {item.index for item in study.slices}
+        if (
+            study.status == "uploaded"
+            or len(study.slices) != study.upload_expected_slices
+            or actual_indexes != expected_indexes
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Finish and finalize the CT series upload before requesting inference",
+            )
     active_job = session.scalar(
         select(InferenceJobRecord)
         .where(

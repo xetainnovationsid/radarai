@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -18,6 +20,7 @@ from radar_api.inference_service import (
 )
 from radar_api.models import (
     FindingEvidenceRecord,
+    ImageAssetRecord,
     InferenceJobRecord,
     InferenceScoreRecord,
     ModelVersionRecord,
@@ -32,6 +35,41 @@ logger = logging.getLogger("radar_api.inference")
 PREPROCESSING_VERSION = "densenet121-ct-preprocessing/v2"
 
 
+def _materialize_dicom_slices(session, study: StudyRecord, directory: Path) -> list[Path]:
+    """Write stored database blobs to private temporary paths for the path-based model runner."""
+    slices_by_asset = {item.image_asset_id: item for item in study.slices}
+    statement = (
+        select(
+            ImageAssetRecord.image_asset_id,
+            ImageAssetRecord.storage_key,
+            ImageAssetRecord.dicom_data,
+        )
+        .where(ImageAssetRecord.image_asset_id.in_(slices_by_asset))
+        .execution_options(yield_per=16)
+    )
+    paths_by_asset: dict[UUID, Path] = {}
+    store = PrivateImageStore()
+
+    for asset_id, storage_key, payload in session.execute(statement):
+        if payload is None:
+            try:
+                payload = store.path_for(storage_key).read_bytes()
+            except OSError as error:
+                raise StudyScoringError("Stored CT slice is unavailable") from error
+        if not payload:
+            raise StudyScoringError("Stored CT slice is empty")
+
+        path = directory / f"{asset_id.hex}.dcm"
+        path.write_bytes(payload)
+        if os.name != "nt":
+            path.chmod(0o600)
+        paths_by_asset[asset_id] = path
+
+    if len(paths_by_asset) != len(study.slices):
+        raise StudyScoringError("Stored CT series is incomplete")
+    return [paths_by_asset[item.image_asset_id] for item in study.slices]
+
+
 def run_inference_job(job_id: UUID) -> None:
     """Run one queued job and persist either a traceable result or safe error state."""
     with SessionLocal() as session:
@@ -41,7 +79,7 @@ def run_inference_job(job_id: UUID) -> None:
         study = session.scalar(
             select(StudyRecord)
             .where(StudyRecord.study_id == job.study_id)
-            .options(selectinload(StudyRecord.slices).selectinload(StudySliceRecord.image_asset))
+            .options(selectinload(StudyRecord.slices))
         )
         if study is None or not study.slices:
             _finish_failed(session, job, study, "study_has_no_slices")
@@ -50,11 +88,12 @@ def run_inference_job(job_id: UUID) -> None:
         job.status = "processing"
         job.started_at = datetime.now(UTC)
         session.commit()
-        paths = [
-            PrivateImageStore().path_for(item.image_asset.storage_key) for item in study.slices
-        ]
         try:
-            result = score_local_checkpoint(paths)
+            with tempfile.TemporaryDirectory(prefix="radar-inference-") as temporary_directory:
+                paths = _materialize_dicom_slices(
+                    session, study, Path(temporary_directory)
+                )
+                result = score_local_checkpoint(paths)
         except ModelUnavailableError:
             _finish_failed(session, job, study, "model_unavailable")
             return
@@ -90,6 +129,7 @@ def run_inference_job(job_id: UUID) -> None:
                 model_version_id=model_version.model_version_id,
             )
             session.add(analysis)
+            session.flush()
             positive_slices: list[tuple[StudySliceRecord, float]] = []
             for image_slice, output in zip(study.slices, score_rows, strict=True):
                 scores = output.get("scores")
